@@ -67,8 +67,14 @@ local_conf_header:
     PACKAGE_CLASSES = "package_rpm"
     USER_CLASSES = "buildstats"
     PATCHRESOLVE = "noop"
-    # Keep downloads/sstate from eating the disk during large rebuilds:
-    INHERIT += "rm_work_and_downloads"
+    # Keep build tmp/work from eating the disk during large rebuilds.
+    # NOTE: do NOT use rm_work_and_downloads here: it moves DL_DIR into the
+    # per-recipe workdir and deletes it with do_rm_work, which breaks
+    # recipes built for both target and native from one tarball (git,
+    # ...): git-native's do_unpack then finds the target's already-deleted
+    # download and dies (and do_fetch is not re-run). Plain rm_work keeps a
+    # shared build/downloads, which is also what the CI cache stores.
+    INHERIT += "rm_work"
 
     BB_DISKMON_DIRS = "\
         STOPTASKS,${TMPDIR},1G,100K \

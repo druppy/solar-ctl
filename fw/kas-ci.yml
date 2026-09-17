@@ -8,4 +8,4 @@ header:
 
 local_conf_header:
   ci: |
-    INHERIT:remove = "rm_work_and_downloads"
+    INHERIT:remove = "rm_work"
