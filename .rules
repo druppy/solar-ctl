@@ -46,6 +46,12 @@
   don't pull `packagegroup-core-basic`/`-full-cmdline` style groups.
 - WiFi creds: `SOLAR_WIFI_SSID/PSK/COUNTRY` in `fw/kas-rpi0.yml` are baked into
   the image at build time. **Never commit real credentials** to them.
+- **Never use `rm_work_and_downloads`** (use plain `INHERIT += "rm_work"`):
+  it puts DL_DIR under `tmp/work/<machine>/<PN>/downloads` and deletes it in
+  do_rm_work — breaks recipes built target+native from one tarball (git,
+  gettext: `tar: Cannot open` in do_unpack). Its leftover do_fetch sstate
+  objects keep stale paths and poison the cache even after reverting; wipe
+  `build/tmp` + `build/sstate-cache` if recovering.
 - Licenses: `LICENSE_FLAGS_ACCEPTED = "synaptics-killswitch"` is required by
   linux-firmware-rpidistro; keep it set.
 
