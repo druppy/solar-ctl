@@ -1,0 +1,13 @@
+[Unit]
+Description=DHCP client on wlan0 (solar-ctl)
+After=solar-wifi.service
+Requires=solar-wifi.service
+
+[Service]
+Type=forking
+PIDFile=/run/udhcpc.wlan0.pid
+ExecStart=/usr/sbin/udhcpc -b -i wlan0 -p /run/udhcpc.wlan0.pid
+ExecStopPost=/usr/sbin/ip link set wlan0 down
+
+[Install]
+WantedBy=multi-user.target

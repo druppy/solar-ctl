@@ -1,0 +1,16 @@
+[Unit]
+Description=WPA supplicant on wlan0 (solar-ctl)
+Wants=sys-subsystem-net-devices-wlan0.device
+After=sys-subsystem-net-devices-wlan0.device
+Before=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/sbin/ip link set wlan0 up
+ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-wlan0.conf -iwlan0 -O /run/wpa_supplicant
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
