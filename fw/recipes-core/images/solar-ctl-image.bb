@@ -31,6 +31,20 @@ IMAGE_INSTALL:append = " \
     solar-wifi \
 "
 
+# Bring-up/debug tooling for the RS485 Modbus bus (Deye inverter).
+# USB serial driver packages cover the chips commonly used by USB-RS485
+# adapters; drop whichever ones you don't need later. Remove mbpoll (GPL-3)
+# from production images if its license doesn't suit distribution.
+IMAGE_INSTALL:append = " \
+    mbpoll \
+    kernel-module-usbserial \
+    kernel-module-ftdi-sio \
+    kernel-module-cp210x \
+    kernel-module-ch341 \
+    kernel-module-pl2303 \
+    kernel-module-cdc-acm \
+"
+
 # Placeholder for the inverter controller app once it lands:
 # IMAGE_INSTALL:append = " inv-ctl"
 
