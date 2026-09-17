@@ -9,7 +9,10 @@ on:
 
 concurrency:
   group: firmware-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancelling a push build on every new push means the 60+ min cold build
+  # never survives long enough to run 'Save bitbake cache', so main never
+  # warms up. Queue push builds; keep cancelling superseded PR builds.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   IMAGE_DIR: build/tmp/deploy/images/raspberrypi0-wifi
