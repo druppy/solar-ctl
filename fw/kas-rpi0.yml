@@ -90,7 +90,11 @@ local_conf_header:
   wifi: |
     # --- WiFi (baked into the image at build time; 0600 root-only) ----------
     # Used by the solar-wifi recipe (wpa_supplicant-wlan0.conf + units).
-    # Generate a PSK from a passphrase with: wpa_passphrase "SSID" "secret"
+    # These are PLACEHOLDERS on purpose: put real credentials in
+    # .kas-wifi-local.yml (gitignored, see fw/README.md) and build with
+    #   kas build fw/kas-rpi0.yml:.kas-wifi-local.yml
+    # Generate a hex PSK from a passphrase with:
+    #   wpa_passphrase "SSID" 'pass' | sed -n 's/.*psk=//p'
     SOLAR_WIFI_SSID = "CHANGEME"
     SOLAR_WIFI_PSK = "CHANGEME"
     # WiFi regulatory domain (allowed channels), ISO 3166-1 alpha-2.

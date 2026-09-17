@@ -57,18 +57,26 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 
 ## Build
 
-1. Set your WiFi credentials in `kas-rpi0.yml` (`wifi:` section):
+1. Set your WiFi credentials — **keep them out of the committed yml**.
+   Create `.kas-wifi-local.yml` (gitignored) next to `kas-rpi0.yml`:
 
    ```yaml
-   SOLAR_WIFI_SSID = "my-network"
-   SOLAR_WIFI_PSK = "my-secret-passphrase"
-   SOLAR_WIFI_COUNTRY = "GB"    # your ISO alpha-2 regulatory domain
+   header:
+     version: 17
+   local_conf_header:
+     wifi-local: |
+       SOLAR_WIFI_SSID = "my-network"
+       SOLAR_WIFI_PSK = "0123...64-hex-from-wpa_passphrase"
+       SOLAR_WIFI_COUNTRY = "DK"   # ISO alpha-2 regulatory domain
    ```
+
+   Generate the hex PSK with: `wpa_passphrase "SSID" 'pass' | sed -n 's/.*psk=//p'`
 
 2. Build from the repo root:
 
    ```sh
-   kas build fw/kas-rpi0.yml
+   kas build fw/kas-rpi0.yml                          # placeholder wifi
+   kas build fw/kas-rpi0.yml:.kas-wifi-local.yml      # your real wifi
    ```
 
 ## Flash
