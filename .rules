@@ -49,6 +49,14 @@
 - Licenses: `LICENSE_FLAGS_ACCEPTED = "synaptics-killswitch"` is required by
   linux-firmware-rpidistro; keep it set.
 
+## Editor on target
+- Use **busybox `vi`** — decided 2026-09 after evaluating classic nvi 1.81.6:
+  it fails to build on wrynose's GCC (2003-era code calls `conv_init`/`conv_enc`
+  with no prototypes anywhere in the tarball; implicit decls are hard errors
+  since GCC 14). Don't retry nvi without backporting the missing prototypes
+  (plus stale bundled config.sub — needs gnu-config copy). Also needs db
+  compat185 bbappend for `dbopen()`. Not worth it for a Zero W image.
+
 ## Device facts
 - Zero W WiFi/BT chip: BCM43430 (firmware `linux-firmware-rpidistro-bcm43430`
   comes from the machine conf; driver `brcmfmac` installed in the image).
