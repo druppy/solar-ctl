@@ -13,11 +13,17 @@
 - Release: Yocto **wrynose**. No poky: standalone oe-core + our distro conf
   `fw/conf/distro/solar-ctl.conf` (`TCLIBC=musl`, `INIT_MANAGER=systemd`,
   trimmed `DISTRO_FEATURES_DEFAULTS`).
-- Pinned refs (verify before changing):
-  - oe-core `wrynose` @ `883075157987ca300af59185b903d6d1977234c3`
-  - meta-raspberrypi `wrynose` @ `f62c67921474370829d24a4fa01ef88543f3906b`
-  - **bitbake has no `wrynose` branch** — pin branch `2.18` (oe-core wrynose's
-    sanity checker hard-requires bitbake 2.18).
+- Layer refs: **branch mode** while pre-production (decided 2026-09): the kas
+  file tracks branch tips (`wrynose`; bitbake `"2.18"` — bitbake has no
+  wrynose branch and oe-core's sanity checker hard-requires 2.18). Every
+  successful build records resolved commits in `fw/kas-baseline.yml`
+  (reproduce with `kas build --baseline`). kas's "branch without commit is
+  unsafe" warnings are expected/accepted. **Re-pin `commit:` in
+  `fw/kas-rpi0.yml` before tagging the first release.** Last verified good:
+  oe-core `883075157987ca300af59185b903d6d1977234c3`,
+  meta-raspberrypi `f62c67921474370829d24a4fa01ef88543f3906b`,
+  bitbake `f0df79b6b56f6a69067adf974978d9405077f246`,
+  meta-oe `14282a02be9c74a1276a7cda7d6c89e054699a11`.
 - Use **GitHub mirrors**; `git.yoctoproject.org` is unreachable here (Cloudflare 403):
   use `github.com/openembedded/openembedded-core`, `openembedded/bitbake`,
   `agherzan/meta-raspberrypi`.

@@ -27,27 +27,28 @@ repos:
       fw:
   oe-core:
     url: https://github.com/openembedded/openembedded-core
-    commit: 883075157987ca300af59185b903d6d1977234c3
+    # Pre-production: follow release branch tips. Every successful build
+    # records the resolved commits in fw/kas-baseline.yml; reproduce an
+    # exact image with: kas build fw/kas-rpi0.yml --baseline
+    # TODO: pin `commit:` here again before the first tagged release.
+    branch: wrynose
     path: layers/openembedded-core
     layers:
       meta:
   bitbake:
     url: https://github.com/openembedded/bitbake
     # bitbake has no per-release branch names; wrynose requires 2.18
-    # (enforced by oe-core's sanity checker). Commit pins the tip the
-    # image is built/tested against (bump together with oe-core).
+    # (enforced by oe-core's sanity checker).
     branch: "2.18"
-    commit: f0df79b6b56f6a69067adf974978d9405077f246
     path: layers/bitbake
     layers: {}
   meta-raspberrypi:
     url: https://github.com/agherzan/meta-raspberrypi
-    commit: f62c67921474370829d24a4fa01ef88543f3906b
+    branch: wrynose
     path: layers/meta-raspberrypi
   meta-openembedded:
     url: https://github.com/openembedded/meta-openembedded
     branch: wrynose
-    commit: 14282a02be9c74a1276a7cda7d6c89e054699a11
     path: layers/meta-openembedded
     layers:
       # only what we need from meta-OE (mbpoll/libmodbus for bus bring-up)
