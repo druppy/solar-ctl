@@ -1,0 +1,95 @@
+name: firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_DIR: build/tmp/deploy/images/raspberrypi0-wifi
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: write # needed to create releases from tags
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # A Yocto build needs far more space than the default runner image.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
+                      /opt/hostedtoolcache/CodeQL "$HOME/.rustup" || true
+          sudo apt-get purge -y azure-cli microsoft-edge-stable \
+                      google-cloud-cli ghc >/dev/null || true
+          sudo apt-get autoremove -y >/dev/null
+          df -h /
+
+      - name: Install build host deps + kas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential chrpath cpio diffstat file gawk git \
+            python3 python3-git python3-jinja2 python3-pyparsing \
+            python3-setuptools zlib1g-dev
+          python3 -m venv "$HOME/kas-venv"
+          "$HOME/kas-venv/bin/pip" install --quiet kas
+          echo "$HOME/kas-venv/bin" >> "$GITHUB_PATH"
+
+      # Reuse downloads + sstate between runs; falls back to a cold build
+      # (slower but works) when the key changes (kas files or recipes).
+      - name: Restore bitbake cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/sstate-cache
+            build/downloads
+          key: yocto-${{ hashFiles('fw/**/*.yml', 'fw/**/*.bb', 'fw/conf/**') }}
+
+      - name: Build firmware image
+        run: kas build fw/kas-rpi0.yml:fw/kas-ci.yml
+
+      # Use the stable (symlinked) artifact names, resolve to real files.
+      - name: Stage release artifacts
+        run: |
+          mkdir -p dist
+          cp -L "$IMAGE_DIR/solar-ctl-image-raspberrypi0-wifi.rootfs.wic.bz2" \
+                dist/solar-ctl-image.wic.bz2
+          cp -L "$IMAGE_DIR/solar-ctl-image-raspberrypi0-wifi.rootfs.wic.bmap" \
+                dist/solar-ctl-image.bmap
+          cp -L "$IMAGE_DIR/solar-ctl-image-raspberrypi0-wifi.rootfs.manifest" \
+                dist/solar-ctl-image.manifest
+          (cd dist && sha256sum solar-ctl-image.* > SHA256SUMS)
+          ls -lh dist/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: solar-ctl-image-${{ github.sha }}
+          path: dist/
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      - name: Save bitbake cache
+        uses: actions/cache/save@v4
+        if: github.event_name != 'pull_request'
+        with:
+          path: |
+            build/sstate-cache
+            build/downloads
+          key: yocto-${{ hashFiles('fw/**/*.yml', 'fw/**/*.bb', 'fw/conf/**') }}

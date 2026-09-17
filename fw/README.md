@@ -5,6 +5,28 @@ on the **wrynose** release. Standalone **openembedded-core** — *no poky* —
 with a deliberately minimal image (~100 packages, ~48 MB compressed):
 **musl** libc, **busybox**, **systemd**.
 
+## CI / releases
+
+`.github/workflows/firmware.yml` builds the image with
+`kas build fw/kas-rpi0.yml:fw/kas-ci.yml` (the `kas-ci.yml` fragment only
+keeps the sstate/download cache for Actions to reuse):
+
+- **push/PR to main** — build + `solar-ctl-image-<sha>` artifact (48 MB zip
+  contents: `wic.bz2`, `bmap`, `manifest`, `SHA256SUMS`)
+- **tag `v*`** — same build, additionally published as a GitHub Release
+- **cold** builds take well over an hour on runners; warm (cache hit)
+  builds are minutes. First run is always cold.
+
+Release flow:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+**Security note:** CI builds with the committed `CHANGEME` WiFi
+placeholders. Never wire real credentials into a *public* release build —
+the PSK is baked into the image.
+
 ## Layout
 
 | Path | Purpose |

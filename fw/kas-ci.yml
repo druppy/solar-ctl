@@ -1,0 +1,11 @@
+# CI-only overrides, layered on top of kas-rpi0.yml:
+#   kas build fw/kas-rpi0.yml:fw/kas-ci.yml
+#
+# Keep downloads/sstate in place so the GitHub workflow can restore/save
+# its cache between runs (the main project file strips them to save disk).
+header:
+  version: 17
+
+local_conf_header:
+  ci: |
+    INHERIT:remove = "rm_work_and_downloads"
