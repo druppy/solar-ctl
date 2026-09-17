@@ -34,8 +34,10 @@ repos:
   bitbake:
     url: https://github.com/openembedded/bitbake
     # bitbake has no per-release branch names; wrynose requires 2.18
-    # (enforced by oe-core's sanity checker).
+    # (enforced by oe-core's sanity checker). Commit pins the tip the
+    # image is built/tested against (bump together with oe-core).
     branch: "2.18"
+    commit: f0df79b6b56f6a69067adf974978d9405077f246
     path: layers/bitbake
     layers: {}
   meta-raspberrypi:
@@ -45,6 +47,7 @@ repos:
   meta-openembedded:
     url: https://github.com/openembedded/meta-openembedded
     branch: wrynose
+    commit: 14282a02be9c74a1276a7cda7d6c89e054699a11
     path: layers/meta-openembedded
     layers:
       # only what we need from meta-OE (mbpoll/libmodbus for bus bring-up)
