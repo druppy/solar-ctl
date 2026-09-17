@@ -27,10 +27,12 @@ repos:
       fw:
   oe-core:
     url: https://github.com/openembedded/openembedded-core
-    # Pre-production: follow release branch tips. Every successful build
-    # records the resolved commits in fw/kas-baseline.yml; reproduce an
-    # exact image with: kas build fw/kas-rpi0.yml --baseline
-    # TODO: pin `commit:` here again before the first tagged release.
+    # Pre-production: follow release branch tips. kas warns "branch without
+    # commit is unsafe" - accepted noise. To freeze an exact state (e.g.
+    # before a release tag), run `kas lock fw/kas-rpi0.yml`: it writes
+    # fw/kas-rpi0.lock.yml which kas then honours automatically on every
+    # build until the lock file is updated or removed. TODO: lock before
+    # the first tagged release.
     branch: wrynose
     path: layers/openembedded-core
     layers:
