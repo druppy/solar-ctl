@@ -37,6 +37,8 @@ the PSK is baked into the image.
 | `conf/distro/solar-ctl.conf` | Our distro: `TCLIBC=musl`, `INIT_MANAGER=systemd`, lean distro features |
 | `recipes-core/images/solar-ctl-image.bb` | Minimal image (dropbear ssh, WiFi) |
 | `recipes-connectivity/solar-wifi/` | WiFi bring-up: supplicant config + systemd units |
+| `recipes-core/dropbear/` | bbappend: root-only key-only SSH config |
+| `recipes-core/solar-rootkeys/` | `/root/.ssh/authorized_keys` (FIDO sk-key, public half) |
 
 ## Requirements
 
@@ -77,16 +79,31 @@ Fallback without `bmaptool`: `bzcat <image>.wic.bz2 | sudo dd of=/dev/sdX bs=4M 
 
 ## First boot / console
 
-- **Serial console**: UART is enabled (`ENABLE_UART = "1"`) on the GPIO
-  header pins 6/8/10 (GND/TXD/RXD), 115200 8N1. A getty is up automatically.
+- **Serial console (easy mode, dev phase)**: UART is enabled
+  (`ENABLE_UART = "1"`) on the GPIO header pins 6/8/10 (GND/TXD/RXD),
+  115200 8N1. `root` **auto-logs-in on the serial getty** — plug in a
+  cable and you are in, no password. Lab convenience from
+  `IMAGE_FEATURES += "empty-root-password serial-autologin-root"`; strip
+  both before anything leaves the bench.
 - **Network**: on boot, `solar-wifi.service` starts `wpa_supplicant` on
   `wlan0` and `solar-wifi-dhcp.service` requests a lease via udhcpc.
   Check with `ip addr show wlan0` (from serial).
-- **SSH**: dropbear is installed, but **root has no password** so remote
-  login is locked by default. Either:
-  - set one from the serial console: `passwd`, then `systemctl restart dropbear`, or
-  - for lab images only, uncomment `EXTRA_IMAGE_FEATURES += "empty-root-password"`
-    in `solar-ctl-image.bb` (also allows empty-password root ssh — don't ship this).
+- **SSH — root-only, key-only**: dropbear runs with `-B` (all password
+  auth refused), and `/root/.ssh/authorized_keys` from the
+  `solar-rootkeys` recipe holds the maintainer's FIDO security key
+  (`sk-ssh-ed25519`). No other account has a key or usable password, so
+  root-with-key is the only way in:
+
+  ```sh
+  ssh -i ~/.ssh/id_ed25519_sk root@<board>   # touch the security key when prompted
+  ```
+
+  Adding/removing people = adding/removing public key lines in
+  `recipes-core/solar-rootkeys/solar-rootkeys/root_authorized_keys`
+  (public keys only — safe to commit). Rebuild and reflash, or append
+  directly to `/root/.ssh/authorized_keys` on the target for a quick
+  change. Note: dropbear ≥ 2025.x verifies sk-* keys natively
+  (`DROPBEAR_SK_KEYS`, on by default) — no libfido2 on the target.
 
 ## Changing WiFi later
 

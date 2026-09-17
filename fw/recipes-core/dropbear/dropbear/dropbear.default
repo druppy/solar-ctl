@@ -1,0 +1,11 @@
+# solar-ctl SSH policy: root-only, key-only.
+#
+# "-B" rejects all password authentication -> only holders of a key in
+# /root/.ssh/authorized_keys (installed by the solar-rootkeys recipe) get
+# in, and only as root: every other account has no key and no usable
+# password. OE's default "-w" would deny root logins entirely.
+#
+# NOTE: the allow-root-login IMAGE_FEATURE's postcommand seds away "-w"
+# lines here; keeping only -B means whatever that does, password auth
+# stays off.
+DROPBEAR_EXTRA_ARGS="-B"

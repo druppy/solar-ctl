@@ -13,8 +13,15 @@ LICENSE = "MIT"
 # console= kernel cmdline arg (from SERIAL_CONSOLES + ENABLE_UART=1).
 IMAGE_FEATURES += "ssh-server-dropbear"
 
-# Set a root password at build time (openssl passwd output) if needed:
-#   EXTRA_IMAGE_FEATURES += "empty-root-password"   # lab use only!
+# --- Bring-up access policy (DEV ONLY - rework before deployment) ----------
+# UART:   empty root password + autologin root on the serial console, so a
+#         UART cable alone gets you a root shell (nothing to type).
+# SSH:    root-only, key-only - dropbear runs with -B (passwords refused;
+#         see dropbear bbappend) and only /root/.ssh/authorized_keys exists
+#         (solar-rootkeys). Non-root accounts have no key and no password.
+# Before shipping: drop empty-root-password + serial-autologin-root, set a
+# root password (or lock it), and keep key access only.
+IMAGE_FEATURES += "allow-root-login empty-root-password serial-autologin-root"
 
 # meta-raspberrypi adds 'kernel-modules' (= literally every kernel module,
 # ~1800 packages) to MACHINE_EXTRA_RRECOMMENDS for every rpi machine, and
@@ -29,6 +36,7 @@ IMAGE_INSTALL:append = " \
     wireless-regdb \
     wpa-supplicant \
     solar-wifi \
+    solar-rootkeys \
 "
 
 # Bring-up/debug tooling for the RS485 Modbus bus (Deye inverter).
