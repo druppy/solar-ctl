@@ -43,3 +43,10 @@ repos:
     branch: wrynose
     commit: f62c67921474370829d24a4fa01ef88543f3906b
     path: layers/meta-raspberrypi
+
+  meta-openembedded:
+    url: https://github.com/openembedded/meta-openembedded
+    branch: wrynose
+    path: layers/meta-openembedded
+    layers:
+      meta-oe:
