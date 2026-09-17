@@ -23,9 +23,18 @@ Release flow:
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-**Security note:** CI builds with the committed `CHANGEME` WiFi
-placeholders. Never wire real credentials into a *public* release build —
-the PSK is baked into the image.
+**WiFi in CI:** if the repo secrets `SOLAR_WIFI_SSID`, `SOLAR_WIFI_PSK`
+(and optionally `SOLAR_WIFI_COUNTRY`) are set, Actions injects them as a
+throwaway kas fragment and the credentials are **baked into the built
+image**. This repo is public — artifacts/releases are world-readable, so
+only define these secrets for a **dedicated lab/guest SSID**, or leave
+them unset (builds then keep the `CHANGEME` placeholders). Set them with:
+
+```sh
+gh secret set SOLAR_WIFI_SSID    # then type the value
+gh secret set SOLAR_WIFI_PSK     # hex PSK (wpa_passphrase) or passphrase
+gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
+```
 
 ## Layout
 

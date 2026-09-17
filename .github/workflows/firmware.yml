@@ -64,8 +64,46 @@ jobs:
             build/downloads
           key: yocto-${{ hashFiles('fw/**/*.yml', 'fw/**/*.bb', 'fw/conf/**') }}
 
+      # WiFi from repo secrets (SOLAR_WIFI_SSID / SOLAR_WIFI_PSK /
+      # SOLAR_WIFI_COUNTRY), layered in as a throwaway kas fragment so
+      # nothing is committed. Secrets are auto-masked in runner logs.
+      # WARNING: this repo is PUBLIC - artifacts and releases are
+      # world-readable and a baked image contains the PSK. Only define
+      # these secrets for a dedicated lab/guest SSID, or leave them unset
+      # to keep building with the CHANGEME placeholders.
+      - name: Configure WiFi from secrets
+        env:
+          SOLAR_WIFI_SSID: ${{ secrets.SOLAR_WIFI_SSID }}
+          SOLAR_WIFI_PSK: ${{ secrets.SOLAR_WIFI_PSK }}
+          SOLAR_WIFI_COUNTRY: ${{ secrets.SOLAR_WIFI_COUNTRY }}
+        run: |
+          if [ -z "$SOLAR_WIFI_SSID" ] || [ -z "$SOLAR_WIFI_PSK" ]; then
+            echo "No WiFi secrets configured - building with CHANGEME placeholders."
+            exit 0
+          fi
+          # These values go verbatim into bitbake conf lines (double-quoted)
+          # and then into wpa_supplicant via sed. Reject anything that could
+          # break conf parsing or sed instead of failing obscurely mid-build.
+          # (A 64-hex PSK from wpa_passphrase always passes.)
+          if printf '%s\n%s\n%s' "$SOLAR_WIFI_SSID" "$SOLAR_WIFI_PSK" "${SOLAR_WIFI_COUNTRY:-GB}" \
+             | grep -vqE '^[A-Za-z0-9 ._:@^*+=/?!#%&()~-]*$'; then
+            echo "::error::WiFi secrets contain unsupported characters (quotes, backslash, pipe, etc). Use a 64-hex PSK: wpa_passphrase SSID 'pass' | sed -n 's/.*psk=//p'"
+            exit 1
+          fi
+          {
+            echo "header:"
+            echo "  version: 17"
+            echo "local_conf_header:"
+            echo "  wifi-ci: |"
+            printf '    SOLAR_WIFI_SSID = "%s"\n' "$SOLAR_WIFI_SSID"
+            printf '    SOLAR_WIFI_PSK = "%s"\n' "$SOLAR_WIFI_PSK"
+            printf '    SOLAR_WIFI_COUNTRY = "%s"\n' "${SOLAR_WIFI_COUNTRY:-GB}"
+          } > .kas-wifi-ci.yml
+          echo "KAS_WIFI_FRAGMENT=.kas-wifi-ci.yml" >> "$GITHUB_ENV"
+          echo "::notice::WiFi credentials are BAKED INTO THIS BUILD's image (PSK extractable)!"
+
       - name: Build firmware image
-        run: kas build fw/kas-rpi0.yml:fw/kas-ci.yml
+        run: kas build fw/kas-rpi0.yml:fw/kas-ci.yml${KAS_WIFI_FRAGMENT:+:$KAS_WIFI_FRAGMENT}
 
       # Use the stable (symlinked) artifact names, resolve to real files.
       - name: Stage release artifacts

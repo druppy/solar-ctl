@@ -55,6 +55,9 @@
   don't pull `packagegroup-core-basic`/`-full-cmdline` style groups.
 - WiFi creds: `SOLAR_WIFI_SSID/PSK/COUNTRY` in `fw/kas-rpi0.yml` are baked into
   the image at build time. **Never commit real credentials** to them.
+  CI can inject them from Actions secrets (`SOLAR_WIFI_*`) via a generated
+  `.kas-wifi-ci.yml` fragment (gitignored). Repo is PUBLIC: only bake a
+  lab/guest SSID, never the real home PSK, into CI artifacts/releases.
 - **Never use `rm_work_and_downloads`** (use plain `INHERIT += "rm_work"`):
   it puts DL_DIR under `tmp/work/<machine>/<PN>/downloads` and deletes it in
   do_rm_work — breaks recipes built target+native from one tarball (git,

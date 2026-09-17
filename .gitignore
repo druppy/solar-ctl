@@ -2,3 +2,5 @@
 build/
 kas-build.log
 layers/
+# throwaway CI/local wifi fragment (kas wifi override from secrets)
+.kas-wifi-ci.yml
