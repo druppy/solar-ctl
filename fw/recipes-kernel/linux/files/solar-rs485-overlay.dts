@@ -1,0 +1,51 @@
+/*
+ * solar-rs485-overlay.dts - solar-ctl
+ *
+ * Native RS485 (Deye inverter Modbus bus) on the PL011 uart0,
+ * /dev/ttyAMA0, with hardware RTS used as the MAX485-style DE/!RE
+ * direction signal:
+ *
+ *   TXD0  GPIO14 (P1-08) -> bus A/B driver DI
+ *   RXD0  GPIO15 (P1-10) <- bus A/B receiver RO
+ *   RTS0  GPIO17 (P1-11) -> DE + !RE  (direction; RTS is active-low:
+ *                                     LOW = driving. rs485ctl --invert
+ *                                     or a transistor inverts.)
+ *   CTS0  GPIO16 (P1-36)  unused by the kernel in RS485 mode
+ *
+ * WHY GPIO14/15 and not the PL011's own default 32/33: on the Zero W
+ * those pads are wired to the BCM43430 WiFi/BT module, NOT to the
+ * 40-pin header. GPIO14/15 (physical 8/10) is the only external UART
+ * pair on the board - which is also where the mini-UART console lives,
+ * so this overlay disables uart1 (mini-UART): the serial console and
+ * native RS485 are mutually exclusive on this board.
+ *
+ * Without this overlay: mini-UART console on GPIO14/15 (stock), use a
+ * USB-RS485 adapter for bus work.
+ *
+ * Enable in config.txt:  dtoverlay=solar-rs485
+ * (then rebuild with SERIAL_CONSOLES = "" or expect a dead ttyS0 getty)
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835";
+
+	fragment@0 {
+		target = <&uart0>;
+		__overlay__ {
+			pinctrl-names = "default";
+			pinctrl-0 = <&uart0_gpio14 &uart0_ctsrts_gpio16>;
+			status = "okay";
+		};
+	};
+
+	/* Free GPIO14/15 for the PL011: the mini-UART cannot share them. */
+	fragment@1 {
+		target = <&uart1>;
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+};

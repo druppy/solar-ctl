@@ -3,7 +3,7 @@
 Yocto **kas** build for the **Raspberry Pi Zero W** inverter controller,
 on the **wrynose** release. Standalone **openembedded-core** — *no poky* —
 with a deliberately minimal image (~100 packages, ~48 MB compressed):
-**musl** libc, **busybox**, **systemd**.
+**musl** in stead of libc, **busybox**, **systemd**.
 
 ## CI / releases
 
@@ -48,6 +48,118 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 | `recipes-connectivity/solar-wifi/` | WiFi bring-up: supplicant config + systemd units |
 | `recipes-core/dropbear/` | bbappend: root-only key-only SSH config |
 | `recipes-core/solar-rootkeys/` | `/root/.ssh/authorized_keys` (FIDO sk-key, public half) |
+| `recipes-kernel/linux/` | Kernel config slimming + nv3007/solar-rs485 DT overlays |
+| `recipes-support/rs485ctl/` | RS485 RTS direction-control setup tool |
+
+## Peripherals & wiring (40-pin header)
+
+The Zero W's SoC has two UARTs (PL011 `uart0`, mini-UART `uart1`) and
+one usable SPI (SPI0), but the header only carries **one UART data
+pair (GPIO14/15, physical 8/10)** — the PL011's own default pins
+(GPIO30–33) are wired to the onboard WiFi/BT chip inside the Zero W,
+not to the header. Plan around that: console and native RS485 share
+the same two pins and are switched in `config.txt`; SPI0 and the
+remaining GPIOs are free for the display.
+
+```mermaid
+flowchart LR
+    subgraph SoC [BCM2835]
+        MINI[mini-UART uart1 ttyS0];
+        PL011[PL011 uart0 ttyAMA0];
+        SPI0[SPI0 spi0];
+    end
+    subgraph H [40-pin header]
+        P810["GPIO14/15 P1-08/10"];
+        P11["GPIO17 P1-11"];
+        PSPI["GPIO7-11 P1-24/19/23/21/26"];
+        PGPIO["GPIO25/24/18 P1-22/18/12"];
+    end
+    MINI --- P810
+    PL011 -. "dtoverlay=solar-rs485" .-> P810
+    PL011 -. RTS dir .-> P11
+    SPI0 --- PSPI
+    PGPIO --> TFT[NV3007 TFT]
+```
+
+### Debug console (default)
+
+| signal | GPIO | physical pin |
+| --- | --- | --- |
+| TXD (→ adapter RX) | GPIO14 | P1-08 |
+| RXD (← adapter TX) | GPIO15 | P1-10 |
+| GND | — | P1-06 |
+
+115200 8N1, mini-UART (`ttyS0`), root auto-login on the lab image.
+
+### NV3007 2.8" TFT (SPI0, enabled by default)
+
+320x240 SPI display with the NV3007 controller (an ILI9341 clone —
+driven by the in-kernel tinydrm `ili9341` driver via our
+`nv3007` overlay, which is **on** in `config.txt`):
+
+| display pin | GPIO | physical pin | overlay override |
+| --- | --- | --- | --- |
+| MOSI (SDA) | GPIO10 | P1-19 | — |
+| SCLK (SCK) | GPIO11 | P1-23 | — |
+| CS  | GPIO8 | P1-24 | — |
+| DC  | GPIO25 | P1-22 | `dc_pin=<n>` |
+| RST | GPIO24 | P1-18 | `reset_pin=<n>` |
+| BLK | GPIO18 | P1-12 | `led_pin=<n>` (0 = tie to 3V3) |
+| VCC | — | 3V3 (P1-01/17) | — |
+| GND | — | P1-06/09/14/20/25/30/34/39 | — |
+
+Runs at 3.3 V — do not feed 5 V into data lines unless your module
+board is explicitly 5 V-tolerant. Backlight is driven from GPIO18 via
+`gpio-backlight` (on at boot); wiring BLK straight to 3V3 also works —
+the GPIO then just toggles a disconnected pin.
+
+Check after boot: `dmesg | grep -iE "ili9341|tinydrm|fb0"` and a
+colour-noise smoke test with `head -c 153600 /dev/urandom > /dev/fb0`
+(320×240 px × 2 bytes, RGB565). Orientation: `rotation=90` (landscape)
+by default; `dtoverlay=nv3007,rotate=0` changes it.
+
+### RS485 inverter bus (ttyAMA0 / Modbus RTU)
+
+**Now (bring-up):** use your USB-RS485 adapter on the Zero's USB port
+(OTG cable) — FTDI/CH34x/CP210x/PL2303/CDC-ACM drivers and `mbpoll`
+are in the image:
+
+```sh
+mbpoll -a 3 -b 9600 -t 4 -r 1 /dev/ttyUSB0     # read holding reg 1 of inv 3
+```
+
+**Native (later):** the `solar-rs485` overlay moves the PL011 onto
+the header pair and uses RTS as the transceiver direction signal:
+
+| MAX485-style transceiver | GPIO | physical pin |
+| --- | --- | --- |
+| DI | GPIO14 (TXD0) | P1-08 |
+| RO | GPIO15 (RXD0) | P1-10 |
+| DE + !RE | GPIO17 (RTS0) | P1-11 |
+| A / B | bus A / bus B (+ 120 Ω termination at both ends) | — |
+| VCC | 5 V from P1-02 for 5 V MAX485 boards (RO then needs a divider or level-shifted module!) | — |
+
+Enable by uncommenting the `#dtoverlay=solar-rs485` line in
+`config.txt` (on the target: `mount /dev/mmcblk0p1 /mnt &&
+sed -i 's/^#dtoverlay=solar-rs485/dtoverlay=solar-rs485/'
+/mnt/config.txt && reboot`), or flip it in `RPI_EXTRA_CONFIG` in
+`kas-rpi0.yml` and rebuild — **this steals GPIO14/15 from the
+mini-UART console** (the overlay disables it; there is no other
+pin pair on this board, so you'll be working over SSH after that).
+RTS idles asserted (active-low pad ⇒ LOW = driving); for DE-on-RTS
+MAX485 wiring that means the driver is enabled when idle — set
+`solar-rs485` + `rs485ctl /dev/ttyAMA0 -e -i` (inverted: released
+while driving… experiment — see `rs485ctl -h`), and check with a
+scope on RO/DE before connecting the inverter.
+
+The kernel RS485 mode (auto-RTS per frame) is configured with
+`rs485ctl` (in the image):
+
+```sh
+stty -F /dev/ttyAMA0 9600
+cd /etc && rs485ctl /dev/ttyAMA0 -e -n --send-delay 1 --after-delay 1
+mbpoll -a 3 -b 9600 -t 4 -r 1 /dev/ttyAMA0
+```
 
 ## Requirements
 

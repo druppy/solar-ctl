@@ -67,6 +67,49 @@
 - Licenses: `LICENSE_FLAGS_ACCEPTED = "synaptics-killswitch"` is required by
   linux-firmware-rpidistro; keep it set.
 
+## Kernel / device-tree (learned 2026-09, display + RS485 work)
+- Kernel trim: `DISABLE_VC4GRAPHICS = "1"` (kas local_conf_header) drops the
+  vc4graphics machine feature, else meta-raspberrypi's `vc4graphics.cfg`
+  re-enables DRM_VC4 on top of our fragment. Our fragment:
+  `fw/recipes-kernel/linux/files/solar-ctl-slim.cfg` (kernel-yocto applies
+  `file://*.cfg` from SRC_URI automatically; linux-raspberrypi DOES require
+  linux-yocto.inc). Keep `CONFIG_DRM=y`+`DRM_FBDEV_EMULATION=y`+`TINYDRM_ILI9341`.
+- Custom DTBOs: drop `.dts` in `fw/recipes-kernel/linux/files/`, copy to
+  `${S}/arch/arm/boot/dts/overlays/` in `do_configure:append` (bbappend),
+  append to `RPI_KERNEL_DEVICETREE_OVERLAYS` **in kas local_conf_header**
+  (not the bbappend — IMAGE_BOOT_FILES is evaluated in the image recipe,
+  which never sees kernel-recipe appends). The overlay MUST also be
+  registered in `arch/arm/boot/dts/overlays/Makefile`'s `dtbo-y` list
+  (we do it via `0001-overlays-register-…patch`): kbuild gives "No rule
+  to make target" for unregistered overlays even as explicit make
+  targets. kbuild maps `x.dtbo` ← `x-overlay.dts` (scripts/Makefile.dtbs),
+  so `nv3007-overlay.dts` registers as **`nv3007.dtbo`** (no `-overlay`
+  suffix) — and kernel-yocto COMMITS SRC_URI patches onto the shared
+  kernel-source branch: if a patch changes, `git reset --hard
+  <SRCREV>` in work-shared kernel-source before rebuilding, or the old
+  commit lingers. Validate offline with the built kernel's
+  `scripts/dtc/dtc` + `gcc -E -nostdinc -I <kernel-source>/include -x
+  assembler-with-cpp` (dtc alone fails on `#include <dt-bindings/...>`).
+- NV3007 TFT = ILI9341 clone → tinydrm `ili9341`; its only DT match is
+  `"adafruit,yx240qv29"` (use exactly that in nv3007-overlay.dts).
+  Modules: kernel-module-{ili9341,spi-bcm2835,gpio-backlight}.
+- Zero W UART reality (corrected 2026-09): rpi DT names `uart0`=PL011
+  (ttyAMA0), `uart1`=mini (ttyS0). On Zero W the PL011's default pads
+  GPIO30–33 are wired to the onboard BCM43430 (NOT the header); the
+  40-pin header's only UART pair is GPIO14/15, which **both** UARTs can
+  reach — so console and native RS485 are mutually exclusive there.
+  Default = mini console on 14/15; `solar-rs485` overlay moves PL011 to
+  14/15 + RTS on GPIO17 (cts**rts**_gpio16 group = CTS16/RTS17, ALT3)
+  and disables uart1. amba-pl011 has real RS485 support; PL011 is =y in
+  bcmrpi_defconfig (no module pkg needed). `uart1` overlay ≠ PL011!
+- RS485 direction: `rs485ctl` recipe (fw/recipes-support/rs485ctl) wraps
+  TIOCSRS485 (enable/invert/delays) — busybox has no applet for this.
+- Module pkg names are derived from the module .o name: gpio_backlight.c
+  → package `kernel-module-gpio-backlight` (hyphens, not underscores);
+  verify in `build/tmp/pkgdata/*/runtime/` (survives rm_work).
+- `build/tmp/work-shared/raspberrypi0-wifi/kernel-source` survives rm_work
+  — grep defconfigs/board DTS/overlays there instead of unpacking anything.
+
 ## Editor on target
 - Use **busybox `vi`** — decided 2026-09 after evaluating classic nvi 1.81.6:
   it fails to build on wrynose's GCC (2003-era code calls `conv_init`/`conv_enc`

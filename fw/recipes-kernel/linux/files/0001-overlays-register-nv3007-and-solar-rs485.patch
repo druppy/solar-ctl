@@ -1,0 +1,27 @@
+From: solar-ctl <firmware@solar-ctl.local>
+Date: Thu, 18 Sep 2026 13:45:00 +0200
+Subject: [PATCH] overlays: register nv3007 and solar-rs485 overlays
+
+Add the solar-ctl device-tree overlays (NV3007 SPI TFT panel and the
+PL011-based RS485 inverter-bus port) to the kbuild dtbo-y list so they
+get built and can be referenced from KERNEL_DEVICETREE. Note the
+kbuild naming rule (scripts/Makefile.dtbs: x.dtbo is built from
+x-overlay.dts): the sources nv3007-overlay.dts and
+solar-rs485-overlay.dts build as nv3007.dtbo / solar-rs485.dtbo.
+
+Upstream-Status: Inappropriate [configuration of out-of-tree board files]
+Signed-off-by: solar-ctl <firmware@solar-ctl.local>
+---
+diff --git a/arch/arm/boot/dts/overlays/Makefile b/arch/arm/boot/dts/overlays/Makefile
+index 261dfb885a03..d598674d2b37 100644
+--- a/arch/arm/boot/dts/overlays/Makefile
++++ b/arch/arm/boot/dts/overlays/Makefile
+@@ -196,6 +196,8 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
+ 	mmc.dtbo \
+ 	mz61581.dtbo \
+ 	nospi10.dtbo \
++	nv3007.dtbo \
++	solar-rs485.dtbo \
+ 	ov2311.dtbo \
+ 	ov5647.dtbo \
+ 	ov64a40.dtbo \

@@ -1,0 +1,100 @@
+/*
+ * nv3007-overlay.dts - solar-ctl
+ *
+ * NV3007 2.8" 320x240 SPI TFT. The NV3007 controller is an ILI9341
+ * clone; the in-tree driver is tinydrm's ili9341 (DT match entry
+ * "adafruit,yx240qv29", its only ILI9341 panel id, a plain 240x320
+ * SPI module).
+ *
+ * solar-ctl wiring (defaults; overridable on the dtoverlay= line):
+ *   MOSI  GPIO10  (P1-19)
+ *   SCLK  GPIO11  (P1-23)
+ *   CE0   GPIO8   (P1-24)   SPI0 enabled by this overlay
+ *   DC    GPIO25  (P1-22)   dc_pin=<n>
+ *   RST   GPIO24  (P1-18)   reset_pin=<n>
+ *   BLK   GPIO18  (P1-12)   led_pin=<n>   (gpio-backlight, default-on)
+ *   VCC   3V3, GND
+ *
+ * The panel comes up as 240x320 portrait; rotation=90 gives the
+ * native 320x240 landscape (rotate=<n> to change). Framebuffer:
+ * /dev/fb0 (DRM fbdev emulation).
+ *
+ * Enable in config.txt:  dtoverlay=nv3007
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+	compatible = "brcm,bcm2835";
+
+	fragment@0 {
+		target = <&spidev0>;
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+
+	fragment@1 {
+		target = <&gpio>;
+		__overlay__ {
+			nv3007_pins: nv3007_pins {
+				brcm,pins = <25 24>;
+				brcm,function = <1>; /* out */
+			};
+			nv3007_bl_pins: nv3007_bl_pins {
+				brcm,pins = <18>;
+				brcm,function = <1>; /* out */
+			};
+		};
+	};
+
+	fragment@2 {
+		target-path = "/";
+		__overlay__ {
+			nv3007_backlight: backlight {
+				compatible = "gpio-backlight";
+				gpios = <&gpio 18 GPIO_ACTIVE_HIGH>;
+				default-on;
+				pinctrl-names = "default";
+				pinctrl-0 = <&nv3007_bl_pins>;
+			};
+		};
+	};
+
+	fragment@3 {
+		target = <&spi0>;
+		__overlay__ {
+			/* needed to avoid dtc warning */
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+
+			nv3007: nv3007@0 {
+				compatible = "adafruit,yx240qv29";
+				reg = <0>;
+				spi-max-frequency = <16000000>;
+				dc-gpios = <&gpio 25 GPIO_ACTIVE_HIGH>;
+				reset-gpios = <&gpio 24 GPIO_ACTIVE_HIGH>;
+				rotation = <90>;
+				pinctrl-names = "default";
+				pinctrl-0 = <&nv3007_pins>;
+				backlight = <&nv3007_backlight>;
+				status = "okay";
+			};
+		};
+	};
+
+	__overrides__ {
+		speed = <&nv3007>, "spi-max-frequency:0";
+		rotate = <&nv3007>, "rotation:0";
+		dc_pin = <&nv3007>, "dc-gpios:4",
+			 <&nv3007_pins>, "brcm,pins:4";
+		reset_pin = <&nv3007>, "reset-gpios:4",
+			    <&nv3007_pins>, "brcm,pins:0";
+		led_pin = <&nv3007_backlight>, "gpios:4",
+			  <&nv3007_bl_pins>, "brcm,pins:0";
+	};
+};

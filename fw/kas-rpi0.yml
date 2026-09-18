@@ -66,6 +66,26 @@ local_conf_header:
     # driver if you ever want g_ether (usb0) access from a laptop.
     # ENABLE_DWC2_PERIPHERAL = "1"
 
+    # --- solar-ctl peripherals -------------------------------------------
+    # No display stack: drops the vc4graphics machine feature (and with it
+    # meta-raspberrypi's vc4graphics.cfg, which would force DRM_VC4=y on
+    # top of our slimming fragment in linux-raspberrypi).
+    DISABLE_VC4GRAPHICS = "1"
+    # Ship our device-tree overlays: built by the kernel recipe (files +
+    # bbappend in recipes-kernel/linux) and copied to the boot partition's
+    # overlays/ dir by IMAGE_BOOT_FILES. Must live here (not the kernel
+    # bbappend) so the image recipe sees them too.
+    RPI_KERNEL_DEVICETREE_OVERLAYS:append = " overlays/nv3007.dtbo overlays/solar-rs485.dtbo"
+    # config.txt lines appended by rpi-config: the NV3007 TFT is enabled
+    # by default (harmless when unconnected). solar-rs485 moves the PL011
+    # onto the console's GPIO14/15 and kills the mini-UART console, so it
+    # stays commented out until the transceiver is actually wired - see
+    # fw/README.md for the wiring and the SERIAL_CONSOLES caveat.
+    RPI_EXTRA_CONFIG = "\
+        dtoverlay=nv3007 \n \
+        #dtoverlay=solar-rs485 \n \
+    "
+
     # --- Packaging / build hygiene ------------------------------------------
     PACKAGE_CLASSES = "package_rpm"
     USER_CLASSES = "buildstats"

@@ -43,14 +43,26 @@ IMAGE_INSTALL:append = " \
 # USB serial driver packages cover the chips commonly used by USB-RS485
 # adapters; drop whichever ones you don't need later. Remove mbpoll (GPL-3)
 # from production images if its license doesn't suit distribution.
+# rs485ctl toggles the kernel RS485 RTS direction control on ttyAMA0
+# once the native transceiver is wired up (dtoverlay=solar-rs485).
 IMAGE_INSTALL:append = " \
     mbpoll \
+    rs485ctl \
     kernel-module-usbserial \
     kernel-module-ftdi-sio \
     kernel-module-cp210x \
     kernel-module-ch341 \
     kernel-module-pl2303 \
     kernel-module-cdc-acm \
+"
+
+# NV3007 SPI TFT (dtoverlay=nv3007): tinydrm ili9341 driver + SPI host +
+# GPIO backlight. Remaining deps (drm core, mipi-dbi, fbdev helpers) come
+# via the kernel module packages' own RDEPENDS.
+IMAGE_INSTALL:append = " \
+    kernel-module-ili9341 \
+    kernel-module-spi-bcm2835 \
+    kernel-module-gpio-backlight \
 "
 
 # Placeholder for the inverter controller app once it lands:
