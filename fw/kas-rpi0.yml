@@ -113,8 +113,9 @@ local_conf_header:
     # per-recipe workdir and deletes it with do_rm_work, which breaks
     # recipes built for both target and native from one tarball (git,
     # ...): git-native's do_unpack then finds the target's already-deleted
-    # download and dies (and do_fetch is not re-run). Plain rm_work keeps a
-    # shared build/downloads, which is also what the CI cache stores.
+    # download and dies (and do_fetch is not re-run). Plain rm_work leaves
+    # the shared build/downloads and build/sstate-cache alone (that is what
+    # CI caches - see .github/workflows/firmware.yml).
     INHERIT += "rm_work"
 
     BB_DISKMON_DIRS = "\

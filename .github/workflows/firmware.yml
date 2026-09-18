@@ -69,15 +69,22 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_unconfined=0 || true
           unshare --user --map-root-user true   # fail fast if still blocked
 
-      # Reuse downloads + sstate between runs; falls back to a cold build
-      # (slower but works) when the key changes (kas files or recipes).
+      # Reuse sstate between runs. Only build/sstate-cache is cached
+      # (~1.3 GB): build/downloads is ~9.5 GB (8.4 GB of it is git2 bare
+      # clones) and GitHub's per-repo cache quota is 10 GB, so caching it
+      # put us at 9.97 GiB with zero headroom (saves silently fail above
+      # the quota). Re-downloading costs minutes; losing sstate costs the
+      # 2h+ recompile. restore-keys prefix fallback: when the key rotates
+      # (kas/recipe changes), fall back to the newest yocto-* cache - sstate
+      # is content-addressed, so bitbake rebuilds only what changed.
       - name: Restore bitbake cache
         uses: actions/cache/restore@v6
         with:
-          path: |
-            build/sstate-cache
-            build/downloads
-          key: yocto-${{ hashFiles('fw/**/*.yml', 'fw/**/*.bb', 'fw/conf/**') }}
+          path: build/sstate-cache
+          key: yocto-${{ hashFiles('fw/**/*.yml', 'fw/**/*.bb', 'fw/conf/**') }}-${{ github.sha }}
+          restore-keys: |
+            yocto-${{ hashFiles('fw/**/*.yml', 'fw/**/*.bb', 'fw/conf/**') }}
+            yocto-
 
       # WiFi from repo secrets (SOLAR_WIFI_SSID / SOLAR_WIFI_PSK /
       # SOLAR_WIFI_COUNTRY), layered in as a throwaway kas fragment so
@@ -118,7 +125,7 @@ jobs:
           echo "::notice::WiFi credentials are BAKED INTO THIS BUILD's image (PSK extractable)!"
 
       - name: Build firmware image
-        run: kas build fw/kas-rpi0.yml:fw/kas-ci.yml${KAS_WIFI_FRAGMENT:+:$KAS_WIFI_FRAGMENT}
+        run: kas build fw/kas-rpi0.yml${KAS_WIFI_FRAGMENT:+:$KAS_WIFI_FRAGMENT}
 
       # Use the stable (symlinked) artifact names, resolve to real files.
       - name: Stage release artifacts
@@ -147,11 +154,13 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
 
+      # -<sha> suffix: every push saves a fresh entry (a fixed key would
+      # be skipped with "cache already exists" whenever only .c/.cfg
+      # files changed, leaving stale sstate behind). LRU eviction keeps
+      # ~8 generations of ~1 GB entries under the 10 GB quota.
       - name: Save bitbake cache
         uses: actions/cache/save@v6
         if: github.event_name != 'pull_request'
         with:
-          path: |
-            build/sstate-cache
-            build/downloads
-          key: yocto-${{ hashFiles('fw/**/*.yml', 'fw/**/*.bb', 'fw/conf/**') }}
+          path: build/sstate-cache
+          key: yocto-${{ hashFiles('fw/**/*.yml', 'fw/**/*.bb', 'fw/conf/**') }}-${{ github.sha }}

@@ -8,12 +8,19 @@ with a deliberately minimal image (~120 packages, ~48 MB compressed):
 ## CI / releases
 
 `.github/workflows/firmware.yml` builds the image with
-`kas build fw/kas-rpi0.yml:fw/kas-ci.yml` (the `kas-ci.yml` fragment only
-keeps the sstate/download cache for Actions to reuse):
+`kas build fw/kas-rpi0.yml` (plus a throwaway WiFi fragment when the repo
+secrets are set):
 
 - **push/PR to main** — build + `solar-ctl-image-<sha>` artifact (48 MB zip
   contents: `wic.bz2`, `bmap`, `manifest`, `SHA256SUMS`)
 - **tag `v*`** — same build, additionally published as a GitHub Release
+- **caching**: only `build/sstate-cache` (~1.3 GB) is cached —
+  `build/downloads` is ~9.5 GB (8.4 GB of it is `git2` bare clones) and
+  GitHub's per-repo cache quota is 10 GB, so caching downloads sat at
+  9.97 GiB with zero headroom. `restore-keys` fall back to the newest
+  `yocto-*` cache when the key rotates, and saves carry a `-<sha>` suffix
+  so every push refreshes the cache (sstate is content-addressed — a
+  stale-but-newer cache still only rebuilds what changed).
 - **cold** builds take well over an hour on runners; warm (cache hit)
   builds are minutes. First run is always cold.
 
@@ -41,7 +48,6 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 | Path | Purpose |
 | --- | --- |
 | `kas-rpi0.yml` | **Build this** — repos (wrynose branch tips), machine, WiFi creds, local.conf bits |
-| `kas-ci.yml` | CI-only fragment layered on top (drops `rm_work` so Actions can cache) |
 | `conf/layer.conf` | `fw/` is a small meta layer (`solar-ctl`) |
 | `conf/distro/solar-ctl.conf` | Our distro: `TCLIBC=musl`, `INIT_MANAGER=systemd`, lean distro features |
 | `recipes-core/images/solar-ctl-image.bb` | Minimal image (dropbear ssh, WiFi) |
