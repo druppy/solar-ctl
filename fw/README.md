@@ -48,7 +48,7 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 | `recipes-connectivity/solar-wifi/` | WiFi bring-up: supplicant config + systemd units |
 | `recipes-core/dropbear/` | bbappend: root-only key-only SSH config |
 | `recipes-core/solar-rootkeys/` | `/root/.ssh/authorized_keys` (FIDO sk-key, public half) |
-| `recipes-kernel/linux/` | Kernel config slimming + nv3007/solar-rs485 DT overlays |
+| `recipes-kernel/linux/` | Kernel config slimming + nv3007/solar-rs485 DT overlays (142×428 panel-mipi-dbi TFT) |
 | `recipes-support/rs485ctl/` | RS485 RTS direction-control setup tool |
 
 ## Peripherals & wiring (40-pin header)
@@ -91,11 +91,14 @@ flowchart LR
 
 115200 8N1, mini-UART (`ttyS0`), root auto-login on the lab image.
 
-### NV3007 2.8" TFT (SPI0, enabled by default)
+### NV3007 2.79" TFT (142×428 SPI, enabled by default)
 
-320x240 SPI display with the NV3007 controller (an ILI9341 clone —
-driven by the in-kernel tinydrm `ili9341` driver via our
-`nv3007` overlay, which is **on** in `config.txt`):
+TZT 2.79" 142×428 SPI display with the NV3007 controller. It is driven
+by the generic in-kernel `panel-mipi-dbi` driver (not `ili9341` — that
+one hardcodes 240×320) via our `nv3007` overlay, which is **on** in
+`config.txt`. The resolution comes from the overlay's `panel-timing`
+node; the controller init sequence comes from a firmware file, see
+below:
 
 | display pin | GPIO | physical pin | overlay override |
 | --- | --- | --- | --- |
@@ -113,10 +116,30 @@ board is explicitly 5 V-tolerant. Backlight is driven from GPIO18 via
 `gpio-backlight` (on at boot); wiring BLK straight to 3V3 also works —
 the GPIO then just toggles a disconnected pin.
 
-Check after boot: `dmesg | grep -iE "ili9341|tinydrm|fb0"` and a
-colour-noise smoke test with `head -c 153600 /dev/urandom > /dev/fb0`
-(320×240 px × 2 bytes, RGB565). Orientation: `rotation=90` (landscape)
-by default; `dtoverlay=nv3007,rotate=0` changes it.
+**Init-sequence firmware (panel stays dark without it):**
+`panel-mipi-dbi` has no built-in NV3007 init code; at probe it requests
+`/lib/firmware/panel-mipi-dbi-spi.bin` (the name is hardwired to the DT
+compatible string). The file is the vendor init sequence in the
+`mipi_dbi_commands` blob format documented in
+`drivers/gpu/drm/tiny/panel-mipi-dbi.c` (command/length/payload
+records, version 1; delays encoded as NOP commands). It is **not**
+yet baked into the image — until it is, the driver logs
+`No config file found for compatible 'panel-mipi-dbi-spi'` and the
+backlight comes on but the panel stays blank. To test with a blob
+handy: `scp blob root@<host>:/lib/firmware/panel-mipi-dbi-spi.bin`
+— the driver retries `request_firmware()` every minute, no reboot
+needed.
+
+Check after boot: `dmesg | grep -iE "mipi-dbi|panel|fb0"`, then
+`fbset -info` (expect 142×428) and a pixel smoke test:
+`dd if=/dev/urandom of=/dev/fb0 bs=1024 count=119`.
+
+**Orientation:** the panel is portrait 142×428 and `panel-mipi-dbi`
+has no DT `rotation` property (unlike the old ili9341 overlay). For a
+landscape UI, rotate in the application's draw path — at 121 kB per
+frame this is cheap; a MADCTL 0x36 `MV` bit baked into the init blob
+is worth testing too, but the driver re-sends its own MADCTL on
+enable, so software rotation is the reliable route.
 
 ### RS485 inverter bus (ttyAMA0 / Modbus RTU)
 

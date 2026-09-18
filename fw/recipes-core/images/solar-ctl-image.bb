@@ -56,11 +56,13 @@ IMAGE_INSTALL:append = " \
     kernel-module-cdc-acm \
 "
 
-# NV3007 SPI TFT (dtoverlay=nv3007): tinydrm ili9341 driver + SPI host +
-# GPIO backlight. Remaining deps (drm core, mipi-dbi, fbdev helpers) come
-# via the kernel module packages' own RDEPENDS.
+# NV3007 2.79" TFT (dtoverlay=nv3007): generic panel-mipi-dbi driver +
+# SPI host + GPIO backlight. Remaining deps (drm-mipi-dbi, kms helpers,
+# fbdev emulation) come via the kernel module packages' own RDEPENDS.
+# NOTE: the panel only comes up once the NV3007 init sequence is present
+# as /lib/firmware/panel-mipi-dbi-spi.bin (vendor init code - see README).
 IMAGE_INSTALL:append = " \
-    kernel-module-ili9341 \
+    kernel-module-panel-mipi-dbi \
     kernel-module-spi-bcm2835 \
     kernel-module-gpio-backlight \
 "

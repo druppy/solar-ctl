@@ -73,7 +73,7 @@
   re-enables DRM_VC4 on top of our fragment. Our fragment:
   `fw/recipes-kernel/linux/files/solar-ctl-slim.cfg` (kernel-yocto applies
   `file://*.cfg` from SRC_URI automatically; linux-raspberrypi DOES require
-  linux-yocto.inc). Keep `CONFIG_DRM=y`+`DRM_FBDEV_EMULATION=y`+`TINYDRM_ILI9341`.
+  linux-yocto.inc). Keep `CONFIG_DRM=y`+`DRM_FBDEV_EMULATION=y`+`DRM_PANEL_MIPI_DBI`.
 - Custom DTBOs: drop `.dts` in `fw/recipes-kernel/linux/files/`, copy to
   `${S}/arch/arm/boot/dts/overlays/` in `do_configure:append` (bbappend),
   append to `RPI_KERNEL_DEVICETREE_OVERLAYS` **in kas local_conf_header**
@@ -90,9 +90,18 @@
   commit lingers. Validate offline with the built kernel's
   `scripts/dtc/dtc` + `gcc -E -nostdinc -I <kernel-source>/include -x
   assembler-with-cpp` (dtc alone fails on `#include <dt-bindings/...>`).
-- NV3007 TFT = ILI9341 clone → tinydrm `ili9341`; its only DT match is
-  `"adafruit,yx240qv29"` (use exactly that in nv3007-overlay.dts).
-  Modules: kernel-module-{ili9341,spi-bcm2835,gpio-backlight}.
+- NV3007 TFT (corrected 2026-09): the panel is a **2.79" TZT 142×428
+  portrait** module, not a 240×320 ILI9341 — use the generic
+  `panel-mipi-dbi` driver (`compatible = "panel-mipi-dbi-spi"`;
+  `CONFIG_DRM_PANEL_MIPI_DBI=m` already in bcmrpi_defconfig). Mode comes
+  from a `panel-timing` child node in the overlay (hactive/vactive +
+  porches; blank/unspecified props = 0 is accepted). The controller init
+  sequence is a **firmware file** `/lib/firmware/panel-mipi-dbi-spi.bin`
+  (= compatible[0] + ".bin"; request_firmware, retried ~every 60s) — we
+  do NOT ship it yet, so the panel stays dark until the vendor init code
+  is baked in; never fabricate NV3007 register values. mipi-dbi has no
+  DT `rotation`; rotate in software. `TINYDRM_ILI9341` is now disabled
+  in the slim fragment. Modules: kernel-module-{panel-mipi-dbi,spi-bcm2835,gpio-backlight}.
 - Zero W UART reality (corrected 2026-09): rpi DT names `uart0`=PL011
   (ttyAMA0), `uart1`=mini (ttyS0). On Zero W the PL011's default pads
   GPIO30–33 are wired to the onboard BCM43430 (NOT the header); the

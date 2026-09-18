@@ -1,10 +1,13 @@
 /*
  * nv3007-overlay.dts - solar-ctl
  *
- * NV3007 2.8" 320x240 SPI TFT. The NV3007 controller is an ILI9341
- * clone; the in-tree driver is tinydrm's ili9341 (DT match entry
- * "adafruit,yx240qv29", its only ILI9341 panel id, a plain 240x320
- * SPI module).
+ * 2.79" NV3007 TFT (TZT 142x428 8-pin SPI module). Driven by the
+ * generic panel-mipi-dbi driver (NOT ili9341 - that one hardcodes
+ * 240x320). The mode comes from the panel-timing node below; the
+ * NV3007 controller init sequence comes from the firmware file
+ * /lib/firmware/panel-mipi-dbi-spi.bin, baked into the image by
+ * fw/recipes-kernel/firmware-nv3007. Without that file the panel
+ * simply stays dark (driver retries the request periodically).
  *
  * solar-ctl wiring (defaults; overridable on the dtoverlay= line):
  *   MOSI  GPIO10  (P1-19)
@@ -15,9 +18,9 @@
  *   BLK   GPIO18  (P1-12)   led_pin=<n>   (gpio-backlight, default-on)
  *   VCC   3V3, GND
  *
- * The panel comes up as 240x320 portrait; rotation=90 gives the
- * native 320x240 landscape (rotate=<n> to change). Framebuffer:
- * /dev/fb0 (DRM fbdev emulation).
+ * Panel is native portrait 142x428; framebuffer /dev/fb0 (DRM fbdev
+ * emulation). mipi-dbi has no DT rotation property - see README
+ * "Display orientation" for the two supported ways to rotate.
  *
  * Enable in config.txt:  dtoverlay=nv3007
  */
@@ -73,23 +76,39 @@
 			status = "okay";
 
 			nv3007: nv3007@0 {
-				compatible = "adafruit,yx240qv29";
+				compatible = "panel-mipi-dbi-spi";
 				reg = <0>;
-				spi-max-frequency = <16000000>;
+				spi-max-frequency = <32000000>;
 				dc-gpios = <&gpio 25 GPIO_ACTIVE_HIGH>;
 				reset-gpios = <&gpio 24 GPIO_ACTIVE_HIGH>;
-				rotation = <90>;
 				pinctrl-names = "default";
 				pinctrl-0 = <&nv3007_pins>;
 				backlight = <&nv3007_backlight>;
+				/* 16-bit pixel bus, init sequence via firmware
+				   file (no native 18-bit mode on this module) */
+				format = "r5g6b5";
 				status = "okay";
+
+				panel-timing {
+					hactive = <142>;
+					vactive = <428>;
+					clock-frequency = <11800000>;
+					hsync-len = <2>;
+					vsync-len = <2>;
+					/* porch values from the NV3007
+					   reference driver; every other
+					   timing property is blank (0) */
+					hback-porch = <8>;
+					hfront-porch = <8>;
+					vback-porch = <10>;
+					vfront-porch = <8>;
+				};
 			};
 		};
 	};
 
 	__overrides__ {
 		speed = <&nv3007>, "spi-max-frequency:0";
-		rotate = <&nv3007>, "rotation:0";
 		dc_pin = <&nv3007>, "dc-gpios:4",
 			 <&nv3007_pins>, "brcm,pins:4";
 		reset_pin = <&nv3007>, "reset-gpios:4",
