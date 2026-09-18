@@ -27,6 +27,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Defense in depth: these gitignored files carry the WiFi PSK
+      # (.zed/tasks.json env block, kas wifi fragments). Fail the build
+      # loudly if one ever slips into a commit (git add -f, .gitignore
+      # regression) - the repo is public.
+      - name: Guard against committed secret files
+        run: |
+          LEAKED=$(git ls-files .zed/tasks.json .kas-wifi-local.yml .kas-wifi-ci.yml)
+          if [ -n "$LEAKED" ]; then
+            echo "::error::secret-bearing file(s) tracked by git: $LEAKED"
+            exit 1
+          fi
+
       # A Yocto build needs far more space than the default runner image.
       - name: Free up disk space
         run: |

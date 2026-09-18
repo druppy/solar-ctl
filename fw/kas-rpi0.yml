@@ -14,6 +14,24 @@ machine: raspberrypi0-wifi
 target:
   - solar-ctl-image
 
+# WiFi credentials for the solar-wifi recipe (wpa_supplicant-wlan0.conf +
+# units). Declaring them here makes kas export them to bitbake (via
+# BB_ENV_PASSTHROUGH_ADDITIONS) AND lets the OS environment override the
+# placeholders below - that is how the real values get in without ever
+# touching a committed file: the Zed "Build FW" task (.zed/tasks.json,
+# gitignored) sets them as env vars. CI instead injects them from Actions
+# secrets via the generated .kas-wifi-ci.yml fragment, whose local.conf
+# assignments override the environment. Arbitrary UNdeclared env vars are
+# ignored by kas - only the three names below are passed through.
+# The recipe's sed uses '|' as delimiter: values must not contain '|'.
+# Generate a hex PSK from a passphrase with:
+#   wpa_passphrase "SSID" 'pass' | sed -n 's/.*psk=//p'
+env:
+  SOLAR_WIFI_SSID: CHANGEME
+  SOLAR_WIFI_PSK: CHANGEME
+  # WiFi regulatory domain (allowed channels), ISO 3166-1 alpha-2.
+  SOLAR_WIFI_COUNTRY: GB
+
 repos:
   # Pull in the pinned repo definitions (oe-core, bitbake,
   # meta-raspberrypi, this repo)...
@@ -106,19 +124,6 @@ local_conf_header:
         HALT,${TMPDIR},100M,1K \
         HALT,${DL_DIR},100M,1K \
         HALT,${SSTATE_DIR},100M,1K"
-
-  wifi: |
-    # --- WiFi (baked into the image at build time; 0600 root-only) ----------
-    # Used by the solar-wifi recipe (wpa_supplicant-wlan0.conf + units).
-    # These are PLACEHOLDERS on purpose: put real credentials in
-    # .kas-wifi-local.yml (gitignored, see fw/README.md) and build with
-    #   kas build fw/kas-rpi0.yml:.kas-wifi-local.yml
-    # Generate a hex PSK from a passphrase with:
-    #   wpa_passphrase "SSID" 'pass' | sed -n 's/.*psk=//p'
-    SOLAR_WIFI_SSID = "CHANGEME"
-    SOLAR_WIFI_PSK = "CHANGEME"
-    # WiFi regulatory domain (allowed channels), ISO 3166-1 alpha-2.
-    SOLAR_WIFI_COUNTRY = "GB"
 
   licenses: |
     # linux-firmware-rpidistro requires accepting the Synaptics killswitch

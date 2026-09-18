@@ -9,6 +9,8 @@ LIC_FILES_CHKSUM = "file://${COREBASE}/meta/COPYING.MIT;md5=3da9cfbcb788c80a0384
 # Pure file installation: no compiler/libc needed.
 INHIBIT_DEFAULT_DEPS = "1"
 
+S = "${UNPACKDIR}"
+
 SRC_URI = "file://root_authorized_keys"
 
 do_install() {

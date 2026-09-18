@@ -8,6 +8,8 @@ LIC_FILES_CHKSUM = "file://${COREBASE}/meta/COPYING.MIT;md5=3da9cfbcb788c80a0384
 
 inherit systemd
 
+S = "${UNPACKDIR}"
+
 # Configure from local.conf (or kas local_conf_header). The PSK is baked
 # into the image (root-only, 0600), so treat any built image as containing
 # your network credentials.

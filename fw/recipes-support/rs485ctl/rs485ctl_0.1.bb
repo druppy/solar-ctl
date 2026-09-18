@@ -4,7 +4,7 @@ polarity and before/after-send delays, for half-duplex buses with a \
 MAX485-style transceiver driven by the UART's RTS line (solar-ctl inverter bus)."
 HOMEPAGE = "https://github.com/kloknibor/solar-ctl"
 LICENSE = "MIT"
-LIC_FILES_CHKSUM = "file://rs485ctl.c;md5=c1e2f73ca3485ed20f6326155f091134"
+LIC_FILES_CHKSUM = "file://rs485ctl.c;md5=63e16379edbde0f55b66f767badff5c7"
 
 SRC_URI = "file://rs485ctl.c"
 

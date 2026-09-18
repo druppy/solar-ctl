@@ -1,11 +1,15 @@
 # solar-ctl SSH policy: root-only, key-only.
 #
-# "-B" rejects all password authentication -> only holders of a key in
+# "-s" disables password logins -> only holders of a key in
 # /root/.ssh/authorized_keys (installed by the solar-rootkeys recipe) get
 # in, and only as root: every other account has no key and no usable
 # password. OE's default "-w" would deny root logins entirely.
 #
 # NOTE: the allow-root-login IMAGE_FEATURE's postcommand seds away "-w"
-# lines here; keeping only -B means whatever that does, password auth
-# stays off.
-DROPBEAR_EXTRA_ARGS="-B"
+# lines here (ours ships neither). NEVER use "-B" for this: dropbear's -B
+# means "allow blank password logins", not "reject passwords" -- combined
+# with the lab empty-root-password feature, pre-2025 dropbear versions
+# would then let anyone in as root with an empty password. dropbear
+# 2025.89 happens to reject blank passwords anyway, but -s is the
+# correct, explicit way to switch password auth off.
+DROPBEAR_EXTRA_ARGS="-s"

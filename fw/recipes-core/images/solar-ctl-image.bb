@@ -16,9 +16,10 @@ IMAGE_FEATURES += "ssh-server-dropbear"
 # --- Bring-up access policy (DEV ONLY - rework before deployment) ----------
 # UART:   empty root password + autologin root on the serial console, so a
 #         UART cable alone gets you a root shell (nothing to type).
-# SSH:    root-only, key-only - dropbear runs with -B (passwords refused;
-#         see dropbear bbappend) and only /root/.ssh/authorized_keys exists
-#         (solar-rootkeys). Non-root accounts have no key and no password.
+# SSH:    root-only, key-only - dropbear runs with -s (password logins
+#         disabled; see dropbear.default) and only
+#         /root/.ssh/authorized_keys exists (solar-rootkeys). Non-root
+#         accounts have no key and no password.
 # Before shipping: drop empty-root-password + serial-autologin-root, set a
 # root password (or lock it), and keep key access only.
 IMAGE_FEATURES += "allow-root-login empty-root-password serial-autologin-root"

@@ -19,13 +19,14 @@ static void usage(const char *prog)
 {
 	fprintf(stderr,
 		"usage: %s DEV [options]\n"
+		"  -h            this help\n"
 		"  -g            get: print current settings and exit\n"
 		"  -e            enable RS485 mode\n"
 		"  -d            disable RS485 mode\n"
 		"  -i            inverted RTS: released while driving\n"
 		"  -n            normal RTS: asserted while driving\n"
-		"  --send-delay MS   hold RTS MS after the last byte\n"
-		"  --after-delay MS  RTS release time before RX (ms)\n"
+		"  --send-delay MS   delay in ms after RTS is asserted, before data\n"
+		"  --after-delay MS  delay in ms after the last byte, before RTS is released\n"
 		"\n"
 		"example (PL011 + MAX485, DE wired to RTS):\n"
 		"  stty -F /dev/ttyAMA0 9600\n"
@@ -61,7 +62,9 @@ int main(int argc, char **argv)
 	for (int i = 2; i < argc; i++) {
 		const char *a = argv[i];
 
-		if (!strcmp(a, "-g")) {
+		if (!strcmp(a, "-h")) {
+			usage(argv[0]);
+		} else if (!strcmp(a, "-g")) {
 			get_only = 1;
 		} else if (!strcmp(a, "-e")) {
 			enable = 1;
@@ -72,9 +75,13 @@ int main(int argc, char **argv)
 		} else if (!strcmp(a, "-n")) {
 			invert = 0;
 		} else if (!strcmp(a, "--send-delay")) {
+			if (i + 1 >= argc)
+				usage(argv[0]);
 			dsend = strtoul(argv[++i], NULL, 0);
 			hsend = 1;
 		} else if (!strcmp(a, "--after-delay")) {
+			if (i + 1 >= argc)
+				usage(argv[0]);
 			dafter = strtoul(argv[++i], NULL, 0);
 			hafter = 1;
 		} else {

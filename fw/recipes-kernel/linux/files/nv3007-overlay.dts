@@ -5,9 +5,10 @@
  * generic panel-mipi-dbi driver (NOT ili9341 - that one hardcodes
  * 240x320). The mode comes from the panel-timing node below; the
  * NV3007 controller init sequence comes from the firmware file
- * /lib/firmware/panel-mipi-dbi-spi.bin, baked into the image by
- * fw/recipes-kernel/firmware-nv3007. Without that file the panel
- * simply stays dark (driver retries the request periodically).
+ * /lib/firmware/panel-mipi-dbi-spi.bin, which is NOT shipped in the
+ * image yet (see fw/README.md). Without that file the panel simply
+ * stays dark (the driver retries the request periodically; scp the
+ * blob to the target to test).
  *
  * solar-ctl wiring (defaults; overridable on the dtoverlay= line):
  *   MOSI  GPIO10  (P1-19)
@@ -19,8 +20,8 @@
  *   VCC   3V3, GND
  *
  * Panel is native portrait 142x428; framebuffer /dev/fb0 (DRM fbdev
- * emulation). mipi-dbi has no DT rotation property - see README
- * "Display orientation" for the two supported ways to rotate.
+ * emulation). mipi-dbi has no DT rotation property - see fw/README.md
+ * "Orientation" for the two supported ways to rotate.
  *
  * Enable in config.txt:  dtoverlay=nv3007
  */

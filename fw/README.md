@@ -2,8 +2,8 @@
 
 Yocto **kas** build for the **Raspberry Pi Zero W** inverter controller,
 on the **wrynose** release. Standalone **openembedded-core** — *no poky* —
-with a deliberately minimal image (~100 packages, ~48 MB compressed):
-**musl** in stead of libc, **busybox**, **systemd**.
+with a deliberately minimal image (~120 packages, ~48 MB compressed):
+**musl** instead of glibc, **busybox**, **systemd**.
 
 ## CI / releases
 
@@ -40,8 +40,8 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 
 | Path | Purpose |
 | --- | --- |
-| `kas-rpi0.yml` | **Build this** — repos (pinned to wrynose), machine, WiFi creds, local.conf bits |
-| `kas-baseline.yml` | Reference copy of the repo pinning (kas ≥ 5 can't auto-include fragments) |
+| `kas-rpi0.yml` | **Build this** — repos (wrynose branch tips), machine, WiFi creds, local.conf bits |
+| `kas-ci.yml` | CI-only fragment layered on top (drops `rm_work` so Actions can cache) |
 | `conf/layer.conf` | `fw/` is a small meta layer (`solar-ctl`) |
 | `conf/distro/solar-ctl.conf` | Our distro: `TCLIBC=musl`, `INIT_MANAGER=systemd`, lean distro features |
 | `recipes-core/images/solar-ctl-image.bb` | Minimal image (dropbear ssh, WiFi) |
@@ -193,7 +193,22 @@ mbpoll -a 3 -b 9600 -t 4 -r 1 /dev/ttyAMA0
 ## Build
 
 1. Set your WiFi credentials — **keep them out of the committed yml**.
-   Create `.kas-wifi-local.yml` (gitignored) next to `kas-rpi0.yml`:
+   The kas file declares `SOLAR_WIFI_SSID/PSK/COUNTRY` in its `env:`
+   section (placeholders), so plain environment variables override them
+   and are passed through to the build — no credential file at all. The
+   Zed **Build FW** task does exactly this (its env block lives in the
+   gitignored `.zed/tasks.json`):
+
+   ```sh
+   SOLAR_WIFI_SSID="my-network" \
+   SOLAR_WIFI_PSK="0123...64-hex-from-wpa_passphrase" \
+   SOLAR_WIFI_COUNTRY=DK \
+   kas build fw/kas-rpi0.yml
+   ```
+
+   For non-interactive builds there is also the kas-fragment route:
+   create `.kas-wifi-local.yml` (gitignored) next to `kas-rpi0.yml` and
+   build with `kas build fw/kas-rpi0.yml:.kas-wifi-local.yml`:
 
    ```yaml
    header:
@@ -211,7 +226,7 @@ mbpoll -a 3 -b 9600 -t 4 -r 1 /dev/ttyAMA0
 
    ```sh
    kas build fw/kas-rpi0.yml                          # placeholder wifi
-   kas build fw/kas-rpi0.yml:.kas-wifi-local.yml      # your real wifi
+   kas build fw/kas-rpi0.yml:.kas-wifi-local.yml      # your real wifi (fragment route)
    ```
 
 ## Flash
@@ -240,8 +255,9 @@ Fallback without `bmaptool`: `bzcat <image>.wic.bz2 | sudo dd of=/dev/sdX bs=4M 
 - **Network**: on boot, `solar-wifi.service` starts `wpa_supplicant` on
   `wlan0` and `solar-wifi-dhcp.service` requests a lease via udhcpc.
   Check with `ip addr show wlan0` (from serial).
-- **SSH — root-only, key-only**: dropbear runs with `-B` (all password
-  auth refused), and `/root/.ssh/authorized_keys` from the
+- **SSH — root-only, key-only**: dropbear runs with `-s` (password logins
+  disabled; root key login allowed — OE's default `-w` would lock root out
+  entirely), and `/root/.ssh/authorized_keys` from the
   `solar-rootkeys` recipe holds the maintainer's FIDO security key
   (`sk-ssh-ed25519`). No other account has a key or usable password, so
   root-with-key is the only way in:
@@ -261,8 +277,9 @@ Fallback without `bmaptool`: `bzcat <image>.wic.bz2 | sudo dd of=/dev/sdX bs=4M 
 
 Three options:
 
-1. **Rebuild**: edit `SOLAR_WIFI_*` in `kas-rpi0.yml`, `kas build` again
-   (fast, everything is cached except the image). Note: the PSK lives in
+1. **Rebuild**: change the `SOLAR_WIFI_*` values in your build task env
+   (or your `.kas-wifi-local.yml` fragment), `kas build` again (fast,
+   everything is cached except the image). Note: the PSK lives in
    the image (root-only 0600 file) — treat built images as secret.
 2. **On the target** (persists across reboots, not across reflashes):
    ```sh
