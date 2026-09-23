@@ -1,7 +1,12 @@
 # A/B OTA updates for solar-ctl (SWUpdate)
 
-**Status: design record; one compile gate wired up, nothing in an image yet.**
+**Status: design record + compile gate PASSED; nothing in an image yet.**
 Branch `swupdate_setup`.
+The gate question ("does SWUpdate build against our musl/wrynose distro?") is
+answered: **yes** — `swupdate_2026.05.1.bb` builds on musl in CI with our
+fragment applied, all four kconfig assertions holding (`[ci]` run 35926622985,
+artifact `swupdate-dotconfig-<merge-sha>`). The next unknowns are the bench
+tests (§10 step 2), not the toolchain.
 This file is the research + design record so the next session does not have
 to re-derive any of it. Facts carry a provenance label:
 
@@ -10,6 +15,7 @@ to re-derive any of it. Facts carry a provenance label:
 | `[wrynose]`  | Verified against the oe-core/meta-raspberrypi `wrynose` branch     |
 | `[master]`   | Verified against upstream `master` (wrynose may lag — re-check)    |
 | `[kas]`      | Read from kas' own sources (build-tool behaviour, not a layer)     |
+| `[ci]`       | Observed in our own Actions run (job log / uploaded artifact)      |
 | `[reported]` | From upstream docs/a source I read, but not re-read first-hand     |
 | `[inferred]` | My reasoning from the above — treat as a hypothesis to test        |
 | `[bench]`    | Unknown today; settles only by running the probe/tests on hardware |
@@ -251,6 +257,18 @@ Implemented on the `swupdate_setup` branch as a **compile gate only**: added in
 with `swupdate`), *not* in `kas-rpi0.yml` — the image build stays untouched
 until the musl question is answered. Built by the `swupdate` CI job.
 
+> **Dangling-bbappend trap (learned the hard way, PR #1 CI).** Our recipe glue
+> first lived in `fw/recipes-support/swupdate/` and the image build died:
+> `ERROR: No recipes in default available for: .../swupdate_%.bbappend`.
+> Every layer is parsed by every build, so a `*.bbappend` in an active layer
+> whose target recipe is absent is a **hard error**, not a warning — even
+> though nothing in the image references swupdate. Fix: a separate thin layer
+> `fw-swupdate/` (`conf/layer.conf`, collection `solar-ctl-swupdate`,
+> `LAYERREQUIRES += "swupdate"`) that *only* `fw/kas-swupdate.yml` adds via
+> `repos.solar-ctl.layers`, which is a mapping so it merges with the included
+> config's `fw`. When SWUpdate enters the image, move the recipe back into
+> `fw/` and delete the layer. `[wrynose]`
+
 - `meta-swupdate` has a **`wrynose`** branch; `BBFILE_COLLECTIONS += "swupdate"`,
   priority 6, `LAYERSERIES_COMPAT_swupdate = "whinlatter wrynose"`,
   `LAYERDEPENDS_swupdate = "openembedded-layer"` — already satisfied, we carry
@@ -267,7 +285,8 @@ until the musl question is answered. Built by the `swupdate` CI job.
   `merge_config.sh -O ${B} -m ${WORKDIR}/.config $(find_cfgs(d))` where cml1's
   `find_cfgs` returns **every `*.cfg` in `SRC_URI`**, and finally
   `olddefconfig`. ⇒ a config fragment is just a `.cfg` added by a bbappend
-  (`fw/recipes-support/swupdate/`), and `-m` means the last file wins. `[wrynose]`
+  (`fw-swupdate/recipes-support/swupdate/`), and `-m` means the last file
+  wins. `[wrynose]`
 - The recipe's anonymous python computes `DEPENDS` from the **merged** config
   text, and its fragment regex is `^(?:# )?(CONFIG_[a-zA-Z0-9_]*)[= ].*\n?` ⇒
   `# CONFIG_FOO is not set` really does cancel a base `CONFIG_FOO=y` *and* the
@@ -315,16 +334,22 @@ until the musl question is answered. Built by the `swupdate` CI job.
 - kas mechanics worth knowing before editing these ymls: configs merge
   key-by-key but **list and scalar values are replaced**, not appended
   (`includehandler._internal_dict_merge`) — which is why `target:
-  [swupdate]` in the fragment overrides `solar-ctl-image`. String entries under
-  `header.includes` resolve against the **repo root** (file-relative works but
-  draws a warning). `kas build --target X` (or `KAS_TARGET=X`) replaces the
-  config's target outright. `[kas]`
+  [swupdate]` in the fragment overrides `solar-ctl-image`. `repos.<id>.layers`
+  is a **mapping** (layer path -> null | disabled | {prio}), so an including
+  config that adds a key ADDS a layer while the rest of the parent entry
+  survives. String entries under `header.includes` resolve against the **repo
+  root** (file-relative works but draws a warning). `kas build --target X` (or
+  `KAS_TARGET=X`) replaces the config's target outright. `[kas]`
 
 ### 6.2 Shipped defconfig vs. our fragment
 
-"fragment" = what `fw/recipes-support/swupdate/swupdate/solar-ctl.cfg` asks
+"fragment" = what `fw-swupdate/recipes-support/swupdate/swupdate/solar-ctl.cfg` asks
 for. Because `olddefconfig` can silently drop a symbol (6.1), the table
-describes intent — the CI job's `.config` dump is the evidence.
+describes intent — the CI job's `.config` dump is the evidence. That dump now
+exists (`[ci]`) and confirms every line of intent above survived
+`olddefconfig`, plus `SSL_IMPL_OPENSSL=y` (so `SIGNED_IMAGES` is real, not
+probed away) and `LUA=y` against **lua 5.5.0** in oe-core, which was a
+worth-worrying-about unknown.
 
 | Symbol                             | shipped   | fragment    | Note                                               |
 | ---------------------------------- | --------- | ----------- | -------------------------------------------------- |
@@ -341,6 +366,8 @@ describes intent — the CI job's `.config` dump is the evidence.
 | `HW_COMPATIBILITY`                 | y         | y           | ⇒ `/etc/hwrevision` is **mandatory**               |
 | `SURICATTA` (+ `CURL`/`CURL_SSL`)  | n         | n (later)   | **this is the Hawkbit client**; `CURL*` are hidden |
 | `DISKPART` / `JSON` / `ARCHIVE`    | y/n       | n           | not needed to write squashfs to a partition        |
+| `CONFIG_XZ`                        | n         | n           | for xz payloads *inside* the `.swu`, not the roots |
+| `UPDATE_STATE_CHOICE_BOOTLOADER`   | **y**     | **y**       | not optional - see 6.3                             |
 
 ### 6.3 Things SWUpdate will *not* do for us
 
@@ -348,6 +375,22 @@ describes intent — the CI job's `.config` dump is the evidence.
   `none`/`ebg`/`uboot`/`grub`/`cboot`; there is no `sysboot`/tryboot handler.
   → set `bootloader_transaction_marker = false;` and
   `bootloader_state_marker = false;` and do the switch in a script/preinstall.
+- **Update state cannot be stored "in the bootloader", and the Kconfig will
+  not warn you.** The "Update Status Storage" choice (`bootloader/Kconfig`) has
+  exactly **one** option, `UPDATE_STATE_CHOICE_BOOTLOADER`, and it depends on
+  `BOOTLOADER_EBG || UBOOT || BOOTLOADER_NONE || BOOTLOADER_GRUB` — so picking
+  `BOOTLOADER_NONE` *forces* it on (a choice with one visible option is not
+  optional), which is what the merged config shows:
+  `CONFIG_UPDATE_STATE_CHOICE_BOOTLOADER=y` + `UPDATE_STATE_BOOTLOADER="ustate"`
+  `[wrynose]` `[ci]`. There is **no file-based alternative to select**.
+  Worse, `bootloader/none.c` implements `env_get`/`env_set` on a
+  `static struct dict environment` — a **process-local RAM dict** that returns
+  0 (success) and evaporates at reboot `[wrynose]`. So `ustate`,
+  `swupdate-env`, `-e setenv` and any `set_bootloader_state`/`bootstate`
+  property silently *succeed into the void*: no error, nothing persists across
+  a reboot. Consequence: **any** boot-state/trial/confirm/bootcount bookkeeping
+  is ours to persist (a file under `/data`), and nothing in `sw-description`
+  may use `bootstate=`/`set_bootloader_state`/`swupdate-env`. `[wrynose]`
 - **No `dual_copy` property** (that is RAUC vocabulary). Standby-slot
   selection is ours: two `images:` entries +
   `swupdate -i x.swu --select stable,copy-B`.
@@ -370,6 +413,11 @@ is remote root. Before the web UI is reachable from any network:
 `CONFIG_SIGNED_IMAGES=y` + `CONFIG_HASH_VERIFY=y`, `swupdate-privkey.pem` kept
 off-repo, `--setkey`/`-k <pubkey.pem>` baked into the image, and the
 `sha256.hash` + `signature.asn1` checked on every install.
+
+The compile gate confirms the SSL side is not probed away: the merged config
+keeps `CONFIG_SSL_IMPL_OPENSSL=y` (GPGME/mbedTLS/WOLFSSL off) alongside
+`CONFIG_SIGNED_IMAGES=y` + `CONFIG_HASH_VERIFY=y`, so the `HAVE_LIBSSL`-style
+drop hazard did **not** bite here. `[ci]`
 
 ### 6.5 Rollback without a boot counter
 
@@ -431,6 +479,9 @@ slots; only "which file the firmware reads" disappears from the design).
 - 512 MB RAM: no double-copy installs (see 6.3), and `mksquashfs -b 262144`
   style tuning is a build-host concern, not a target one.
 - SD cards: ext4 journal on `/data` is our choice, but keep FAT writes rare.
+- **No `bootstate=` / `set_bootloader_state` / `swupdate-env` anywhere**: with
+  `BOOTLOADER_NONE` the "bootloader environment" is a RAM dict, so those calls
+  succeed and persist nothing (see 6.3). Boot state lives in `/data`.
 - Project rules still bind the implementation: `S = "${UNPACKDIR}"`; no line
   starting with `}` inside recipe functions; `IMAGE_BOOT_FILES` /
   `RPI_KERNEL_DEVICETREE_OVERLAYS` set in **kas `local_conf_header`**, not a
@@ -442,12 +493,15 @@ slots; only "which file the firmware reads" disappears from the design).
 ## 10. Implementation order
 
 1. **`bitbake swupdate` on musl first.** Everything else is gated on this;
-   upstream has no musl patches for it, so this is the real unknown.
-   *Wired up 2026-09-23:* `fw/kas-swupdate.yml` (adds `meta-swupdate`, target =
-   `swupdate` only) + `fw/recipes-support/swupdate/` (kconfig fragment, kept out
-   of every image) + the `swupdate` CI job, which dumps the merged `.config` and
-   fails if signing was silently dropped. Not covered: the `wic-native -c fetch`
-   check from §2.1.
+   upstream has no musl patches for it, so this was the real unknown.
+   **DONE 2026-09-23 — it builds.** `fw/kas-swupdate.yml` (adds `meta-swupdate`,
+   target = `swupdate` only) + the `fw-swupdate` layer (kconfig fragment, kept
+   out of every image) + the `swupdate` CI job, which dumps the merged
+   `.config` and fails if signing was silently dropped. Result:
+   `swupdate_2026.05.1.bb` built on musl with lua 5.5.0, and the dumped config
+   shows `SIGNED_IMAGES`/`HASH_VERIFY`/`BOOTLOADER_NONE`/`SYSTEMD` = y and
+   `UBOOT`/`MTD`/`SURICATTA` off, as intended. `[ci]` Not covered: the
+   `wic-native -c fetch` check from §2.1 (still open).
 2. Bench tests 0–4 on the *current* layout/probe; record results here.
 3. Read-only root + `overlayfs-etc` + `/var` overlay + `/data` on the
    **existing** two-partition layout (as far as it goes) → milestone: an

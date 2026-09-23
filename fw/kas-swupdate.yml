@@ -9,12 +9,20 @@
 # our musl/wrynose distro? Upstream ships no musl patches for it. Nothing
 # here installs SWUpdate into an image (no IMAGE_INSTALL change).
 #
+# Isolation is by LAYER, not by intent: the SWUpdate bbappend + kconfig
+# fragment live in the `fw-swupdate` layer, which only this config adds. The
+# `fw` layer is parsed by every build including the image build, and a
+# bbappend whose recipe is absent is a hard bitbake error on wrynose, so
+# putting it there broke the image build on PR #1.
+#
 # Kas merge semantics (read before editing, verified against kas source):
 #  * configs are merged key-by-key: `repos:` and `local_conf_header:` merge,
 #    but scalar AND list values are REPLACED (includehandler._internal_dict_merge)
 #    => the `target` below replaces `solar-ctl-image`, it does not add to it.
 #  * string entries under `header.includes` resolve against the REPO ROOT
 #    (a file-relative path also works, but kas warns about it).
+#  * `repos.<id>.layers` is a mapping, not a list => adding a key here ADDS a
+#    layer on top of the included config's `fw`, it does not drop it.
 header:
   version: 17
   includes:
@@ -24,6 +32,14 @@ target:
   - swupdate
 
 repos:
+  solar-ctl:
+    # The gate layer holds swupdate_%.bbappend. It must NOT live in `fw/`:
+    # the image build parses every bbappend in every active layer, and with no
+    # meta-swupdate there its target recipe does not exist -> bitbake aborts
+    # with "No recipes in default available for: ..." (learned the hard way on
+    # PR #1). A separate layer keeps the recipe in exactly one build: this one.
+    layers:
+      fw-swupdate:
   meta-swupdate:
     # GitHub mirror (git.yoctoproject.org is unreachable from here). The
     # layer sits at the repo root (conf/layer.conf), hence no `layers:` key

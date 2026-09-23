@@ -226,17 +226,18 @@ jobs:
             yocto-${{ hashFiles('fw/**/*.yml', 'fw/**/*.bb', 'fw/conf/**') }}
             yocto-
 
-      # fw/kas-swupdate.yml includes kas-rpi0.yml and *replaces* target:
-      # with `swupdate` (kas replaces list values when merging configs), so no
-      # image and no WiFi credentials are involved in this job.
+      # fw/kas-swupdate.yml includes kas-rpi0.yml, adds the fw-swupdate layer
+      # (repos.<id>.layers is a mapping, so it merges) and *replaces* target:
+      # with `swupdate` (kas replaces list values), so no image and no WiFi
+      # credentials are involved in this job.
       - name: Build swupdate recipe only
         run: kas build fw/kas-swupdate.yml
 
       # Not merely "did it compile" but "did our kconfig fragment apply":
       # symbols whose HAVE_<lib> sysroot probe failed are dropped by
       # olddefconfig without a word, so a green build can still mean signing
-      # is silently off. fw/recipes-support/swupdate/swupdate_%.bbappend copies
-      # the merged ${B}/.config into ${T} (rm_work never deletes `temp`).
+      # is silently off. fw-swupdate/recipes-support/swupdate/swupdate_%.bbappend
+      # copies the merged ${B}/.config into ${T} (rm_work never deletes `temp`).
       - name: Verify merged kconfig
         run: |
           mkdir -p swupdate-config
