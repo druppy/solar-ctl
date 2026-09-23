@@ -14,6 +14,11 @@ secrets are set):
 - **push/PR to main** — build + `solar-ctl-image-<sha>` artifact (48 MB zip
   contents: `wic.bz2`, `bmap`, `manifest`, `SHA256SUMS`)
 - **tag `v*`** — same build, additionally published as a GitHub Release
+- **`swupdate` job** — runs in parallel and only *compiles* SWUpdate against
+  our musl distro (`kas build fw/kas-swupdate.yml`, no image). It restores the
+  sstate cache but never saves it (the quota is already spent by the image
+  job) and uploads the merged `.config` as `swupdate-dotconfig-<sha>`, because
+  kconfig drops symbols silently and the file is the only proof of what stuck.
 - **caching**: only `build/sstate-cache` (~1.3 GB) is cached —
   `build/downloads` is ~9.5 GB (8.4 GB of it is `git2` bare clones) and
   GitHub's per-repo cache quota is 10 GB, so caching downloads sat at
@@ -45,19 +50,21 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 
 ## Layout
 
-| Path | Purpose |
-| --- | --- |
-| `kas-rpi0.yml` | **Build this** — repos (wrynose branch tips), machine, WiFi creds, local.conf bits |
-| `conf/layer.conf` | `fw/` is a small meta layer (`solar-ctl`) |
-| `conf/distro/solar-ctl.conf` | Our distro: `TCLIBC=musl`, `INIT_MANAGER=systemd`, lean distro features |
-| `recipes-core/images/solar-ctl-image.bb` | Minimal image (dropbear ssh, WiFi) |
-| `recipes-connectivity/solar-wifi/` | WiFi bring-up: supplicant config + systemd units |
-| `recipes-core/dropbear/` | bbappend: root-only key-only SSH config |
-| `recipes-core/solar-rootkeys/` | `/root/.ssh/authorized_keys` (FIDO sk-key, public half) |
-| `recipes-kernel/linux/` | Kernel config slimming + nv3007/solar-rs485 DT overlays (142×428 panel-mipi-dbi TFT) |
-| `recipes-support/rs485ctl/` | RS485 RTS direction-control setup tool |
-| `docs/swupdate-ota.md` | **A/B OTA design record** (squashfs roots, `/etc` overlay, SWUpdate, tryboot) |
-| `tools/ota-probe.sh` | Read-only on-target probe of boot chain/filesystems (run before OTA work) |
+| Path                                     | Purpose                                                                                       |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `kas-rpi0.yml`                           | **Build this** — repos (wrynose branch tips), machine, WiFi creds, local.conf bits            |
+| `kas-swupdate.yml`                       | SWUpdate compile gate — includes `kas-rpi0.yml`, adds `meta-swupdate`, builds `swupdate` only |
+| `conf/layer.conf`                        | `fw/` is a small meta layer (`solar-ctl`)                                                     |
+| `conf/distro/solar-ctl.conf`             | Our distro: `TCLIBC=musl`, `INIT_MANAGER=systemd`, lean distro features                       |
+| `recipes-core/images/solar-ctl-image.bb` | Minimal image (dropbear ssh, WiFi)                                                            |
+| `recipes-connectivity/solar-wifi/`       | WiFi bring-up: supplicant config + systemd units                                              |
+| `recipes-core/dropbear/`                 | bbappend: root-only key-only SSH config                                                       |
+| `recipes-core/solar-rootkeys/`           | `/root/.ssh/authorized_keys` (FIDO sk-key, public half)                                       |
+| `recipes-kernel/linux/`                  | Kernel config slimming + nv3007/solar-rs485 DT overlays (142×428 panel-mipi-dbi TFT)          |
+| `recipes-support/swupdate/`              | bbappend + kconfig fragment; compiled in CI, **not** installed in the image yet               |
+| `recipes-support/rs485ctl/`              | RS485 RTS direction-control setup tool                                                        |
+| `docs/swupdate-ota.md`                   | **A/B OTA design record** (squashfs roots, `/etc` overlay, SWUpdate, tryboot)                 |
+| `tools/ota-probe.sh`                     | Read-only on-target probe of boot chain/filesystems (run before OTA work)                     |
 
 ## Peripherals & wiring (40-pin header)
 
@@ -308,8 +315,18 @@ switching done by the **Raspberry Pi firmware** (`tryboot`, since there is no
 U-Boot) — is recorded in [`docs/swupdate-ota.md`](docs/swupdate-ota.md),
 including which facts are verified and which are still bench questions.
 
-Nothing is implemented yet. Before touching the layout, run the read-only
-probe on current hardware and keep the output:
+Nothing is implemented yet — but the first unknown is being closed in CI: the
+`swupdate` job builds `fw/kas-swupdate.yml`, which adds the
+`meta-swupdate` layer and builds the **`swupdate` recipe only** (no image,
+no `IMAGE_INSTALL` change), to answer "does it compile against musl?". To
+reproduce locally:
+
+```sh
+kas build fw/kas-swupdate.yml            # builds the swupdate recipe only
+```
+
+Before touching the layout, run the read-only probe on current hardware and
+keep the output:
 
 ```sh
 scp fw/tools/ota-probe.sh root@<board>:/tmp/ && ssh root@<board> sh /tmp/ota-probe.sh

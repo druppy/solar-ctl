@@ -143,7 +143,18 @@
 
 ## A/B OTA / SWUpdate (in design — full record in fw/docs/swupdate-ota.md)
 - Target: A/B **squashfs-xz** read-only roots + `/etc` overlay + ext4 `/data`;
-  slot switch by **RPi firmware** (no U-Boot). Design only, nothing built yet.
+  slot switch by **RPi firmware** (no U-Boot). Design only, nothing in an image.
+- **Compile gate exists** (2026-09-23): `fw/kas-swupdate.yml` (`includes:
+  fw/kas-rpi0.yml`, `target: [swupdate]`) + `fw/recipes-support/swupdate/`
+  (bbappend + kconfig fragment) + a **parallel `swupdate` CI job** that builds
+  only the recipe — musl is the open question, so the image build in
+  `fw/kas-rpi0.yml` is deliberately untouched and `swupdate` is NOT in
+  `IMAGE_INSTALL`. That job restores the sstate cache but must **never save it**
+  (10 GB/repo quota; the image job already spends ~1.3 GB per generation), and
+  it asserts the merged kconfig. That config is snapshotted by our bbappend to
+  `${T}/swupdate-merged-dotconfig` (`rm_work` never deletes `temp`); note
+  `${WORKDIR}/.config` is only the *input* merge and still shows the symbols the
+  fragment removed, so it is not evidence of anything.
 - `overlayfs-etc.bbclass` (oe-core) is the `/etc` mechanism, BUT its default
   `OVERLAYFS_ETC_CREATE_MOUNT_DIRS=1` does `mount -o remount,rw /` — on a
   squashfs root that can never work. Set it to `0` and pre-create `/data`.
@@ -160,16 +171,36 @@
   `autoboot.txt`/`tryboot_a_b` exists but legacy start.elf support is untested.
   Nothing decrements a boot counter (tryboot is consumed pre-kernel) → rely on
   `panic=N` + per-slot `slot=A|B` cmdline token, not a bootcount.
-- meta-swupdate has a `wrynose` branch; configured by **its own Kconfig**
-  merged over `recipes-support/swupdate/swupdate/defconfig` (no PACKAGECONFIG).
-  Shipped defconfig is wrong for us: `CONFIG_UBOOT=y` (we have no U-Boot),
-  `SURICATTA`/`CURL`/`SIGNED_IMAGES`/`HASH_VERIFY` all off. Hawkbit = just
-  `CONFIG_SURICATTA=y` (+CURL_SSL) — a config, not a protocol to implement.
-  No RPi bootloader handler exists (`none/ebg/uboot/grub/cboot` only) → set
+- meta-swupdate has a `wrynose` branch; layer is at the **repo root** (kas entry
+  needs no `layers:` key), `LAYERDEPENDS_swupdate = "openembedded-layer"` (we
+  carry meta-oe). Recipes: `swupdate.inc` + `swupdate_2025.12/2026.05.1/git.bb`
+  sharing one `swupdate/defconfig`; default provider = 2026.05.1. Configured by
+  **its own Kconfig**, no PACKAGECONFIG: `swupdate.inc` inherits `cml1`, so
+  **any `*.cfg` in SRC_URI is a config fragment** — do_configure concatenates
+  flags + `defconfig` + `find_cfgs()` (every SRC_URI `*.cfg`) then
+  `merge_config.sh -m` (last wins) + `olddefconfig`. Ours:
+  `fw/recipes-support/swupdate/swupdate/solar-ctl.cfg`.
+  DEPENDS are computed from the **merged** config text, and the fragment regex
+  accepts `# CONFIG_FOO is not set`, so that form really removes a base `y` and
+  its DEPENDS. Trap: `HAVE_*` are `option env=` symbols probed from the sysroot
+  by SWUpdate's own Makefile, so **olddefconfig silently drops** any symbol with
+  an unmet `depends on HAVE_*` — never trust "the fragment was applied", read
+  the merged `.config` (CI dumps it). `CURL`/`CURL_SSL` are **hidden** (only via
+  `SURICATTA`/`DOWNLOAD*`). `libubootenv`/`libconfig`/`json-c` are unconditional
+  DEPENDS. Shipped defconfig is wrong for us: `CONFIG_UBOOT=y` (we have no
+  U-Boot), `SURICATTA`/`CURL`/`SIGNED_IMAGES`/`HASH_VERIFY` all off. Hawkbit =
+  just `CONFIG_SURICATTA=y` (+CURL_SSL) — a config, not a protocol to implement.
+  No RPi bootloader handler exists (`none/ebg/uboot/grub/cboot` only; and
+  `BOOTLOADER_NONE` is `default y`) → set
   `bootloader_transaction_marker=false; bootloader_state_marker=false;` and
   switch slots ourselves; no `dual_copy` property — standby slot is our job.
   `installed-directly=true` is **mandatory on 512 MB** (else it extracts to
-  tmpfs /tmp). `swupdate-www/-client/-ipc/-lua` are packages of `swupdate`.
+  tmpfs /tmp). `swupdate-www/-client/-ipc/-lua/-progress/-tools/-usb` are
+  packages of `swupdate`. The layer also ships **bbclasses** —
+  `swupdate-image.bbclass` (`.swu` straight from an image recipe +
+  `file://sw-description`) on `swupdate-common.bbclass` (`do_swuimage`,
+  `SWUPDATE_IMAGES*`, `SWUPDATE_SIGNING` ⇒ `cpio-native`/`openssl-native`) — the
+  likely route for building the actual artifacts (signing at build time).
 - **`wic` moved OUT of oe-core** (verified 2026-09-23: no `scripts/lib/wic`
   on wrynose or master). It is a standalone project consumed as a recipe:
   `meta/recipes-support/wic/wic_0.3.1.bb` → `git://git.yoctoproject.org/wic.git`

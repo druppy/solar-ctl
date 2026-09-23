@@ -1,13 +1,15 @@
 # A/B OTA updates for solar-ctl (SWUpdate)
 
-**Status: design record, nothing implemented.** Branch `swupdate_setup`.
+**Status: design record; one compile gate wired up, nothing in an image yet.**
+Branch `swupdate_setup`.
 This file is the research + design record so the next session does not have
 to re-derive any of it. Facts carry a provenance label:
 
 | Label        | Meaning                                                            |
 | ------------ | ------------------------------------------------------------------ |
-| `[wrynose]`  | Verified against the oe-core/meta-raspberrypi `wrynose` branch      |
-| `[master]`   | Verified against upstream `master` (wrynose may lag — re-check)     |
+| `[wrynose]`  | Verified against the oe-core/meta-raspberrypi `wrynose` branch     |
+| `[master]`   | Verified against upstream `master` (wrynose may lag — re-check)    |
+| `[kas]`      | Read from kas' own sources (build-tool behaviour, not a layer)     |
 | `[reported]` | From upstream docs/a source I read, but not re-read first-hand     |
 | `[inferred]` | My reasoning from the above — treat as a hypothesis to test        |
 | `[bench]`    | Unknown today; settles only by running the probe/tests on hardware |
@@ -244,34 +246,101 @@ UART is already contested by RS485.
 
 ### 6.1 Layer & recipe
 
-- `meta-swupdate` has a **`wrynose`** branch; `LAYERSERIES_COMPAT = "whinlatter
-  wrynose"`, `LAYERDEPENDS = "openembedded-layer"` — which we already carry.
-  Add it to `fw/kas-rpi0.yml` as `meta-swupdate` (mirror on GitHub). `[reported]`
-- No `PACKAGECONFIG`: SWUpdate is configured by its **own Kconfig**, with our
-  fragment merged over `recipes-support/swupdate/swupdate/defconfig` via
-  `merge_config.sh`. `[reported]`
-- `swupdate-www`, `-client`, `-ipc`, `-lua` are **packages of the `swupdate`
-  recipe**, not separate recipes. `[reported]`
-- `libubootenv` is an unconditional `DEPENDS` of the recipe — it will build
-  even though we will never call U-Boot. `[reported]`
+Implemented on the `swupdate_setup` branch as a **compile gate only**: added in
+`fw/kas-swupdate.yml` (which `includes: fw/kas-rpi0.yml` and replaces `target:`
+with `swupdate`), *not* in `kas-rpi0.yml` — the image build stays untouched
+until the musl question is answered. Built by the `swupdate` CI job.
 
-### 6.2 Shipped defconfig vs. what we need
+- `meta-swupdate` has a **`wrynose`** branch; `BBFILE_COLLECTIONS += "swupdate"`,
+  priority 6, `LAYERSERIES_COMPAT_swupdate = "whinlatter wrynose"`,
+  `LAYERDEPENDS_swupdate = "openembedded-layer"` — already satisfied, we carry
+  `meta-oe`. The layer lives at the **repo root** (`conf/layer.conf` at top
+  level), so the kas entry needs no `layers:` key — same shape as our
+  `meta-raspberrypi` entry. GitHub mirror `sbabic/meta-swupdate`. `[wrynose]`
+- Recipes on the branch: `swupdate.inc`, one shared `swupdate/` file dir (one
+  `defconfig` for all versions), `swupdate_2025.12.bb`, `swupdate_2026.05.1.bb`,
+  `swupdate_git.bb`. Default provider resolves to the highest PV,
+  **2026.05.1**; we do not pin. `[wrynose]`
+- **No `PACKAGECONFIG`.** `swupdate.inc` inherits `cml1`: `do_configure` writes
+  `CONFIG_EXTRA_CFLAGS/LDFLAGS` into `${WORKDIR}/.config`, appends
+  `${UNPACKDIR}/defconfig`, then
+  `merge_config.sh -O ${B} -m ${WORKDIR}/.config $(find_cfgs(d))` where cml1's
+  `find_cfgs` returns **every `*.cfg` in `SRC_URI`**, and finally
+  `olddefconfig`. ⇒ a config fragment is just a `.cfg` added by a bbappend
+  (`fw/recipes-support/swupdate/`), and `-m` means the last file wins. `[wrynose]`
+- The recipe's anonymous python computes `DEPENDS` from the **merged** config
+  text, and its fragment regex is `^(?:# )?(CONFIG_[a-zA-Z0-9_]*)[= ].*\n?` ⇒
+  `# CONFIG_FOO is not set` really does cancel a base `CONFIG_FOO=y` *and* the
+  `DEPENDS` it pulled in. `[wrynose]`
+- Unconditional `DEPENDS += "libconfig zlib libubootenv json-c"` +
+  `kern-tools-native`, so **`libubootenv` builds even though we will never call
+  U-Boot**. Conditional on symbols: `SURICATTA`/`DOWNLOAD`→curl,
+  `MTD`/`CFI`/`UBIVOL`→mtd-utils, `LUA`→lua, `SYSTEMD`→systemd,
+  `DISKPART`→util-linux+e2fsprogs, `XZ`→xz, `ARCHIVE`→libarchive,
+  `REMOTE_HANDLER`→zeromq, `UCFWHANDLER`→libgpiod, `RDIFFHANDLER`→librsync.
+  `[wrynose]`
+- `swupdate-www`, `-client`, `-ipc`, `-lua`, `-progress`, `-tools`,
+  `-tools-hawkbit`, `-usb` are **packages of the `swupdate` recipe**, not
+  separate recipes. `SYSTEMD_SERVICE:${PN} = "swupdate.service swupdate.socket"`,
+  `wwwdir ?= "/www"`, `RRECOMMENDS:${PN} += "${PN}-ipc"`, IPC sockets default to
+  `/tmp/sockinstctrl` + `/tmp/swupdateprog`, `HW_COMPATIBILITY_FILE =
+  "/etc/hwrevision"`. `[wrynose]`
+- **Silent-drop hazard:** upstream `Kconfig` declares `HAVE_*` as `option env=`
+  symbols that SWUpdate's own Makefile probes from the sysroot
+  (`HAVE_LIBMTD`, `HAVE_LUA`, `HAVE_LIBSSL`, `HAVE_LIBSYSTEMD`,
+  `HAVE_LIBUBOOTENV`, …). Any symbol with an unsatisfied `depends on HAVE_*` is
+  dropped by `olddefconfig` **without a message**, so "the fragment was
+  accepted" proves nothing — and `${WORKDIR}/.config` is only the *input*
+  merge (it still lists `CONFIG_UBOOT=y`), so it is not the evidence either.
+  Mitigation: the CI job dumps the merged `${B}/.config` (the bbappend snapshots
+  it to `${T}/swupdate-merged-dotconfig`, and `rm_work` never touches `temp`)
+  and asserts `SIGNED_IMAGES`/`HASH_VERIFY` are `y` and `UBOOT`/`MTD` are
+  not. `[wrynose]`
+- `CURL` and `CURL_SSL` are **hidden** (`default n`, no prompt) — reached only
+  via `select` from `CHANNEL_CURL`/`CHANNEL_CURL_SSL` (i.e. `DOWNLOAD`,
+  `DOWNLOAD_SSL`, `SURICATTA`). Set them through those, never directly.
+  `BOOTLOADER_NONE` is `default y`, so the "Default Bootloader Interface" choice
+  resolves itself once `UBOOT` is off. `SIGNED_IMAGES` selects `HASH_VERIFY`
+  and both depend on an SSL impl (`SSL_IMPL_OPENSSL=y` is in the shipped
+  defconfig); `SIGALG_RAWRSA`/`SIGALG_CMS` default `y`. `[wrynose]`
+- The layer also ships **bbclasses** (found 2026-09-23, not used by the compile
+  gate): `classes-recipe/swupdate.bbclass` (build a compound `.swu` from an
+  update-image recipe's `SRC_URI` + `SWUPDATE_IMAGES`), `swupdate-image.bbclass`
+  (`inherit` it in an image recipe → `.swu` from the image itself; requires a
+  `file://sw-description`), on top of `swupdate-common.bbclass` (`do_swuimage`
+  sstate task, `SWUDEPLOYDIR`, `SWUPDATE_SIGNING`/`SWUPDATE_IMAGES_ENCRYPTED`
+  ⇒ `cpio-native` + `openssl-native` DEPENDS, and `S = "${UNPACKDIR}"`).
+  This is the likely route for step 5 (and it means signing can happen at
+  build time, not by hand). `[wrynose]`
+- kas mechanics worth knowing before editing these ymls: configs merge
+  key-by-key but **list and scalar values are replaced**, not appended
+  (`includehandler._internal_dict_merge`) — which is why `target:
+  [swupdate]` in the fragment overrides `solar-ctl-image`. String entries under
+  `header.includes` resolve against the **repo root** (file-relative works but
+  draws a warning). `kas build --target X` (or `KAS_TARGET=X`) replaces the
+  config's target outright. `[kas]`
 
-| Symbol                     | shipped     | we need | Note                                        |
-| -------------------------- | ----------- | ------- | ------------------------------------------- |
-| `CONFIG_UBOOT`             | **y**       | **n**   | no U-Boot; `BOOTLOADER_NONE` currently unset |
-| `HANDLER_IN_LUA`           | n           | maybe   | our own slot-switch logic in Lua            |
-| `LUA`/`LUASCRIPTHANDLER`   | y           | y       |                                              |
-| `SHELLSCRIPTHANDLER`       | y           | y       | cheap fallback for the same job             |
-| `SCRIPTS`                  | y           | y       |                                              |
-| `RAW`                      | y           | y       | writes `device=` literally                  |
-| `WEBSERVER`/`MOONGOOSE(SSL)` | y         | y       | stage 1 delivery                            |
-| `HW_COMPATIBILITY`         | y           | y       | ⇒ `/etc/hwrevision` is **mandatory**        |
-| `CONFIG_SYSTEMD`           | n           | y?      | decide at implementation                      |
-| `SURICATTA`                | n           | later   | **this is the Hawkbit client**              |
-| `CURL` / `CURL_SSL`        | n           | later   | required by suricatta                       |
-| `HASH_VERIFY`/`SIGNED_IMAGES` | n        | **y**   | signing gate — see 6.4                      |
-| `MTD`/`CFI`/`DISKPART`/`JSON`/`ARCHIVE` | y/n | mostly n | drop the MTD/CFI noise for an SD card |
+### 6.2 Shipped defconfig vs. our fragment
+
+"fragment" = what `fw/recipes-support/swupdate/swupdate/solar-ctl.cfg` asks
+for. Because `olddefconfig` can silently drop a symbol (6.1), the table
+describes intent — the CI job's `.config` dump is the evidence.
+
+| Symbol                             | shipped   | fragment    | Note                                               |
+| ---------------------------------- | --------- | ----------- | -------------------------------------------------- |
+| `CONFIG_UBOOT`                     | **y**     | **off**     | no U-Boot; `BOOTLOADER_NONE` is default-y anyway   |
+| `CONFIG_MTD` / `CONFIG_CFI`        | **y**     | **off**     | SD card, no flash; also drops mtd-utils DEPENDS    |
+| `HASH_VERIFY` / `SIGNED_IMAGES`    | n         | **y**       | signing gate — see 6.4                             |
+| `CONFIG_SYSTEMD`                   | n         | **y**       | distro is `INIT_MANAGER=systemd`                   |
+| `HANDLER_IN_LUA`                   | n         | n           | slot-switch in Lua vs. shell: still open           |
+| `LUA` / `LUASCRIPTHANDLER`         | y         | y           | keep (scripts)                                     |
+| `SHELLSCRIPTHANDLER`               | y         | y           | cheap fallback for the same job                    |
+| `SCRIPTS`                          | y         | y           |                                                    |
+| `RAW`                              | y         | y           | writes `device=` literally                         |
+| `WEBSERVER` / `MONGOOSE(SSL)`      | y         | y           | stage 1 delivery; `MONGOOSESSL` is web TLS only    |
+| `HW_COMPATIBILITY`                 | y         | y           | ⇒ `/etc/hwrevision` is **mandatory**               |
+| `SURICATTA` (+ `CURL`/`CURL_SSL`)  | n         | n (later)   | **this is the Hawkbit client**; `CURL*` are hidden |
+| `DISKPART` / `JSON` / `ARCHIVE`    | y/n       | n           | not needed to write squashfs to a partition        |
 
 ### 6.3 Things SWUpdate will *not* do for us
 
@@ -373,8 +442,12 @@ slots; only "which file the firmware reads" disappears from the design).
 ## 10. Implementation order
 
 1. **`bitbake swupdate` on musl first.** Everything else is gated on this;
-   upstream has no musl patches for it, so this is the real unknown. Also
-   verify `bitbake wic-native -c fetch` (§2.1).
+   upstream has no musl patches for it, so this is the real unknown.
+   *Wired up 2026-09-23:* `fw/kas-swupdate.yml` (adds `meta-swupdate`, target =
+   `swupdate` only) + `fw/recipes-support/swupdate/` (kconfig fragment, kept out
+   of every image) + the `swupdate` CI job, which dumps the merged `.config` and
+   fails if signing was silently dropped. Not covered: the `wic-native -c fetch`
+   check from §2.1.
 2. Bench tests 0–4 on the *current* layout/probe; record results here.
 3. Read-only root + `overlayfs-etc` + `/var` overlay + `/data` on the
    **existing** two-partition layout (as far as it goes) → milestone: an

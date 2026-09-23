@@ -164,3 +164,115 @@ jobs:
         with:
           path: build/sstate-cache
           key: yocto-${{ hashFiles('fw/**/*.yml', 'fw/**/*.bb', 'fw/conf/**') }}-${{ github.sha }}
+
+  # Compile gate for the A/B OTA design (fw/docs/swupdate-ota.md, step 1 of
+  # its implementation order): "does SWUpdate build against our musl/wrynose
+  # distro?" Upstream ships no musl patches for it, so this is answered on
+  # runners rather than on a laptop. Separate kas config (fw/kas-swupdate.yml)
+  # AND a separate job: the image build, its artifacts and its cache saves
+  # stay untouched.
+  swupdate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    # The setup steps below are deliberately copied from `build` instead of
+    # shared: this job has a different cache policy (restore only) and no
+    # WiFi secrets, release publishing or image artifacts.
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Guard against committed secret files
+        run: |
+          LEAKED=$(git ls-files .zed/tasks.json .kas-wifi-local.yml .kas-wifi-ci.yml)
+          if [ -n "$LEAKED" ]; then
+            echo "::error::secret-bearing file(s) tracked by git: $LEAKED"
+            exit 1
+          fi
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
+                      /opt/hostedtoolcache/CodeQL "$HOME/.rustup" || true
+          sudo apt-get purge -y azure-cli microsoft-edge-stable \
+                      google-cloud-cli ghc >/dev/null || true
+          sudo apt-get autoremove -y >/dev/null
+          df -h /
+
+      - name: Install build host deps + kas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential chrpath cpio diffstat file gawk git \
+            python3 python3-git python3-jinja2 python3-pyparsing \
+            python3-setuptools zlib1g-dev
+          python3 -m venv "$HOME/kas-venv"
+          "$HOME/kas-venv/bin/pip" install --quiet kas
+          echo "$HOME/kas-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Allow unprivileged user namespaces
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_unconfined=0 || true
+          unshare --user --map-root-user true   # fail fast if still blocked
+
+      # Restore only, never save. The 10 GB/repo cache quota is already spent
+      # by the image job (~1.3 GB per -<sha> generation); a second job saving
+      # under its own key would evict the entries that matter.
+      - name: Restore bitbake cache
+        uses: actions/cache/restore@v6
+        with:
+          path: build/sstate-cache
+          key: yocto-${{ hashFiles('fw/**/*.yml', 'fw/**/*.bb', 'fw/conf/**') }}-${{ github.sha }}
+          restore-keys: |
+            yocto-${{ hashFiles('fw/**/*.yml', 'fw/**/*.bb', 'fw/conf/**') }}
+            yocto-
+
+      # fw/kas-swupdate.yml includes kas-rpi0.yml and *replaces* target:
+      # with `swupdate` (kas replaces list values when merging configs), so no
+      # image and no WiFi credentials are involved in this job.
+      - name: Build swupdate recipe only
+        run: kas build fw/kas-swupdate.yml
+
+      # Not merely "did it compile" but "did our kconfig fragment apply":
+      # symbols whose HAVE_<lib> sysroot probe failed are dropped by
+      # olddefconfig without a word, so a green build can still mean signing
+      # is silently off. fw/recipes-support/swupdate/swupdate_%.bbappend copies
+      # the merged ${B}/.config into ${T} (rm_work never deletes `temp`).
+      - name: Verify merged kconfig
+        run: |
+          mkdir -p swupdate-config
+          mapfile -t cfgs < <(find build/tmp/work -type f -name swupdate-merged-dotconfig | sort -u)
+          if [ "${#cfgs[@]}" -eq 0 ]; then
+            echo "::error::no swupdate-merged-dotconfig under build/tmp/work - do_configure failed, or \${B}/.config moved?"
+            exit 1
+          fi
+          fail=0
+          for cfg in "${cfgs[@]}"; do
+            echo "--- $cfg"
+            grep -E '^(CONFIG_[A-Z0-9_]+=|# CONFIG_[A-Z0-9_]+ is not set)' "$cfg" | grep -E \
+              'UBOOT|BOOTLOADER|MTD|CFI|HASH|SIGN|SSL|CRYPTO|SYSTEMD|SURICATTA|CURL|WEBSERVER|MONGOOSE|DISKPART|LUA|RAW|SCRIPTS' | sort
+            if ! grep -qx 'CONFIG_SIGNED_IMAGES=y' "$cfg"; then
+              echo "::error::CONFIG_SIGNED_IMAGES is not =y in $cfg (dropped by olddefconfig?)"; fail=1
+            fi
+            if ! grep -qx 'CONFIG_HASH_VERIFY=y' "$cfg"; then
+              echo "::error::CONFIG_HASH_VERIFY is not =y in $cfg (dropped by olddefconfig?)"; fail=1
+            fi
+            if grep -qx 'CONFIG_UBOOT=y' "$cfg"; then
+              echo "::error::CONFIG_UBOOT=y survived the fragment (no U-Boot on this board)"; fail=1
+            fi
+            if grep -qx 'CONFIG_MTD=y' "$cfg"; then
+              echo "::error::CONFIG_MTD=y survived the fragment (no flash on this board)"; fail=1
+            fi
+            cp "$cfg" swupdate-config/swupdate-dotconfig
+          done
+          exit $fail
+
+      # Uploaded even when the check above fails - reading the merged config
+      # is the whole point of the job.
+      - name: Upload merged kconfig
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: swupdate-dotconfig-${{ github.sha }}
+          path: swupdate-config/
+          if-no-files-found: ignore
+          retention-days: 14
