@@ -56,6 +56,8 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 | `recipes-core/solar-rootkeys/` | `/root/.ssh/authorized_keys` (FIDO sk-key, public half) |
 | `recipes-kernel/linux/` | Kernel config slimming + nv3007/solar-rs485 DT overlays (142×428 panel-mipi-dbi TFT) |
 | `recipes-support/rs485ctl/` | RS485 RTS direction-control setup tool |
+| `docs/swupdate-ota.md` | **A/B OTA design record** (squashfs roots, `/etc` overlay, SWUpdate, tryboot) |
+| `tools/ota-probe.sh` | Read-only on-target probe of boot chain/filesystems (run before OTA work) |
 
 ## Peripherals & wiring (40-pin header)
 
@@ -294,6 +296,24 @@ Three options:
    ```
 3. **Ad-hoc** without editing files: `wpa_cli` (`add_network`, `set_network`,
    `select_network`).
+
+## A/B updates (in design)
+
+The disk layout today is the bare meta-raspberrypi default: one vfat boot
+partition + one ext4 rootfs (`sdimage-raspberrypi.wks`), which means "update"
+currently means "reflash". The plan to replace it — two read-only
+**squashfs** root slots, `/etc` as an **overlayfs** on a writable partition,
+a journalled ext4 `/data`, **SWUpdate** as the update agent, and slot
+switching done by the **Raspberry Pi firmware** (`tryboot`, since there is no
+U-Boot) — is recorded in [`docs/swupdate-ota.md`](docs/swupdate-ota.md),
+including which facts are verified and which are still bench questions.
+
+Nothing is implemented yet. Before touching the layout, run the read-only
+probe on current hardware and keep the output:
+
+```sh
+scp fw/tools/ota-probe.sh root@<board>:/tmp/ && ssh root@<board> sh /tmp/ota-probe.sh
+```
 
 ## Design notes / caveats
 

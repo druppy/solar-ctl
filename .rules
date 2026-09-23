@@ -141,6 +141,54 @@
 - `build/tmp/work-shared/raspberrypi0-wifi/kernel-source` survives rm_work
   — grep defconfigs/board DTS/overlays there instead of unpacking anything.
 
+## A/B OTA / SWUpdate (in design — full record in fw/docs/swupdate-ota.md)
+- Target: A/B **squashfs-xz** read-only roots + `/etc` overlay + ext4 `/data`;
+  slot switch by **RPi firmware** (no U-Boot). Design only, nothing built yet.
+- `overlayfs-etc.bbclass` (oe-core) is the `/etc` mechanism, BUT its default
+  `OVERLAYFS_ETC_CREATE_MOUNT_DIRS=1` does `mount -o remount,rw /` — on a
+  squashfs root that can never work. Set it to `0` and pre-create `/data`.
+  Also conflicts with IMAGE_FEATURES `package-management`.
+- `overlayfs.bbclass` (for `/var`) requires the **`overlayfs` DISTRO_FEATURE,
+  which is NOT in `DISTRO_FEATURES_DEFAULTS`** in fw/conf/distro/solar-ctl.conf
+  — must be added (+ kernel `CONFIG_OVERLAY_FS`). It refuses `/etc` by design.
+  `/var/volatile` for RO rootfs is initscripts-only → systemd never runs it.
+- Slot switching: `tryboot` is the mechanism — firmware sets a one-shot flag,
+  clears it, and loads `tryboot.txt` **instead of** `config.txt`. Kernel side
+  verified (`drivers/firmware/raspberrypi.c` parses `reboot="0 tryboot"` →
+  `RPI_FIRMWARE_SET_REBOOT_FLAGS`, binds on bcm2835-firmware). Arm with
+  `echo '0 tryboot' > /run/systemd/reboot-param && systemctl reboot` (systemd>=254).
+  `autoboot.txt`/`tryboot_a_b` exists but legacy start.elf support is untested.
+  Nothing decrements a boot counter (tryboot is consumed pre-kernel) → rely on
+  `panic=N` + per-slot `slot=A|B` cmdline token, not a bootcount.
+- meta-swupdate has a `wrynose` branch; configured by **its own Kconfig**
+  merged over `recipes-support/swupdate/swupdate/defconfig` (no PACKAGECONFIG).
+  Shipped defconfig is wrong for us: `CONFIG_UBOOT=y` (we have no U-Boot),
+  `SURICATTA`/`CURL`/`SIGNED_IMAGES`/`HASH_VERIFY` all off. Hawkbit = just
+  `CONFIG_SURICATTA=y` (+CURL_SSL) — a config, not a protocol to implement.
+  No RPi bootloader handler exists (`none/ebg/uboot/grub/cboot` only) → set
+  `bootloader_transaction_marker=false; bootloader_state_marker=false;` and
+  switch slots ourselves; no `dual_copy` property — standby slot is our job.
+  `installed-directly=true` is **mandatory on 512 MB** (else it extracts to
+  tmpfs /tmp). `swupdate-www/-client/-ipc/-lua` are packages of `swupdate`.
+- **`wic` moved OUT of oe-core** (verified 2026-09-23: no `scripts/lib/wic`
+  on wrynose or master). It is a standalone project consumed as a recipe:
+  `meta/recipes-support/wic/wic_0.3.1.bb` → `git://git.yoctoproject.org/wic.git`
+  tag v0.3.1, built as `wic-native`. Consequences: canned wks now live in
+  **`<layer>/files/wic/`** (so ours goes in `fw/files/wic/`); `image_types_wic`
+  gained an `IMAGER=direct` abstraction; plugin source (rawcopy) is only
+  greppable locally in `build/downloads/git2/git.yoctoproject.org.wic.git`.
+  Cloudflare still 403s the cgit **web** UI — if `wic-native` ever fails to
+  fetch, mirror wic.git to GitHub and override SRC_URI in a bbappend.
+- Hazards: `/etc` overlay upper is **shared by both slots and survives
+  rollback** (factory reset = wipe the upper dir; app config belongs in
+  `/data`); **never OTA `bootcode.bin`/`start.elf`** (corrupt GPU firmware =
+  truck roll); keep p1 FAT writes rare; MSDOS table + ext4 **fs labels**
+  (`/dev/disk/by-label/`), since `by-partlabel` needs GPT.
+- Bootloader version check: `bitbake -e rpi-bootfiles | grep -E
+  '^(PV|SRCREV|RPIFW_DATE)='` (PV=`${RPIFW_DATE}`), or the
+  `rpi-bootfiles-<PV>.stamp` in the deploy dir; `vcgencmd version` needs
+  libraspberrypi-bin (not installed). Bench probe: `fw/tools/ota-probe.sh`.
+
 ## Editor on target
 - Use **busybox `vi`** — decided 2026-09 after evaluating classic nvi 1.81.6:
   it fails to build on wrynose's GCC (2003-era code calls `conv_init`/`conv_enc`
