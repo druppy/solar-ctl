@@ -757,6 +757,18 @@ Then update §5 (which tier is the plan of record), this matrix, and `.rules`.
 - Never OTA `bootcode.bin`/`start.elf` — a corrupt GPU firmware is a JTAG-and-
   swap-card recovery, i.e. a truck roll. Only ever *add* to p1; keep a known
   good `config.txt`/`tryboot.txt` pair.
+- **Kernel/modules coherence is the one thing A/B does not automatically buy us
+  here.** `start.elf` can only load the kernel from the FAT partition
+  `[reported]`, so there is **one** `kernel*.img` shared by both slots while
+  `/lib/modules/<ver>` lives inside each squashfs slot. Update B with a new
+  kernel *and* rewrite the p1 kernel, then roll back to A, and p1 carries the
+  new kernel over slot A's older `/lib/modules` `[reported]` `[inferred]`.
+  Per-slot `kernel_a.img`/`kernel_b.img` stanzas fix it — which is exactly what
+  `[bench]` test 1c probes. If §8 test 1c says `kernel=` is not honoured, the
+  honest options are to pin the kernel (`SRCREV`) and treat a kernel bump as a
+  separate, deliberately non-atomic artifact, or accept that a rollback can
+  strand an out-of-tree module — for us `panel-mipi-dbi` is the exposure, since
+  `amba-pl011` (the RS485 path) is built-in. `[reported]` `[inferred]`
 - `OVERLAYFS_ETC_CREATE_MOUNT_DIRS = "0"` or the preinit `mount -o remount,rw /`
   fails forever against squashfs.
 - 512 MB RAM: no double-copy installs (see 6.3), and `mksquashfs -b 262144`
