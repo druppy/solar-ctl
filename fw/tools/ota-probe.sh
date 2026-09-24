@@ -8,6 +8,9 @@
 # process substitution, no $((...)) features beyond plain hex arithmetic.
 #
 # Usage:  scp fw/tools/ota-probe.sh root@<board>:/tmp/ && sh /tmp/ota-probe.sh
+#
+# Sections that exist specifically to feed the §8 bench protocol say so in a
+# comment; everything else is test 0 (the baseline).
 
 DT=/proc/device-tree
 
@@ -147,7 +150,9 @@ fi
 sec "boot partition contents"
 # wic's p1 is vfat; find where (if anywhere) it is mounted rather than
 # assuming /boot, then look for the files the OTA design depends on.
-boot=$(awk '$3=="vfat"{print $2; exit}' /proc/mounts 2>/dev/null)
+# OTA_PROBE_BOOT overrides it, e.g. to inspect a card in a bench reader.
+boot="$OTA_PROBE_BOOT"
+[ -n "$boot" ] || boot=$(awk '$3=="vfat"{print $2; exit}' /proc/mounts 2>/dev/null)
 [ -n "$boot" ] || boot=/boot
 printf '  inspecting: %s\n' "$boot"
 for f in config.txt tryboot.txt autoboot.txt cmdline.txt cmdline_a.txt \
@@ -158,6 +163,85 @@ for f in config.txt tryboot.txt autoboot.txt cmdline.txt cmdline_a.txt \
 		printf '  %-20s (absent)\n' "$f"
 	fi
 done
+
+sec "config.txt keys the OTA design leans on"
+# Presence only: whether BCM2835 start.elf actually *honours* any of these is
+# bench test 1/2 (fw/docs/swupdate-ota.md §8), which this script cannot decide.
+# start.elf takes both `key=value` and `key value` (`include foo.txt`,
+# `initramfs foo.cpio.gz`), so match the first token either way and print the
+# original line. awk splits on leading whitespace for us (tabs collapsed first).
+cfgkey() {
+	tr '\t' ' ' < "$boot/config.txt" 2>/dev/null | awk -v k="$1" '
+		{ key = $1; sub(/[ =].*/, "", key)
+		  if (tolower(key) == tolower(k)) { sub(/^ +/, "", $0); printf "%s; ", $0 } }' \
+		| sed 's/; $//'
+}
+if [ ! -f "$boot/config.txt" ]; then
+	printf '  (no config.txt under %s — cannot answer tests 1/2)\n' "$boot"
+else
+	for k in kernel kernel8 initramfs os_prefix cmdline cmdline_file dtoverlay \
+		include boot_partition tryboot_a_b autoboot enable_uart; do
+		found=$(cfgkey "$k")
+		if [ -n "$found" ]; then
+			printf '  %-15s %s\n' "$k" "$found"
+		else
+			printf '  %-15s (not set)\n' "$k"
+		fi
+	done
+	secs=$(tr '\t' ' ' < "$boot/config.txt" | awk '{ if ($1 ~ /^\[/) printf "%s ", $1 }')
+	printf '  sections:   %s\n' "${secs:-(none — no [all]/[tryboot] stanzas)}"
+fi
+
+sec "p1 write path (the slot-switch commit mechanism)"
+# Every tier switches slots by rewriting one text file on the FAT partition,
+# so what matters is how p1 is mounted right now and how much room it has.
+conf_mount=$(awk -v m="$boot" '$2==m {print; exit}' /proc/mounts 2>/dev/null)
+printf '  p1 mount: %s\n' "${conf_mount:-(not mounted; free space unknown — this script will not mount it)}"
+opt=""
+[ -n "$conf_mount" ] && opt=$(printf '%s\n' "$conf_mount" | awk '{print $4}')
+if printf '%s' ",$opt," | grep -q ',ro,'; then
+	printf '  p1 is READ-ONLY: a switch needs mount -o remount,rw (bench test 3)\n'
+elif [ -n "$opt" ]; then
+	printf '  p1 is WRITABLE (%s): switch is a plain write — but that is also a risk\n' "$opt"
+fi
+printf '  root mount options: %s\n' "$(awk '$2=="/"{print $4; exit}' /proc/mounts 2>/dev/null)"
+# Only df the real mount: df on an unmounted $boot would report the rootfs.
+if [ -n "$conf_mount" ] && command -v df >/dev/null 2>&1; then
+	df -k "$boot" 2>/dev/null | sed 's/^/  /'
+fi
+
+sec "SD card size (layout sizing)"
+sd=""
+rootdev=$(tr ' ' '\n' < /proc/cmdline 2>/dev/null | grep -m1 '^root=')
+printf '  kernel says:  %s\n' "${rootdev:-(no root= — an initramfs decides)}"
+for b in /sys/block/mmcblk0 /sys/block/mmcblk1 /sys/block/sda; do
+	[ -d "$b" ] || continue
+	sd=yes
+	sz=$(cat "$b/size" 2>/dev/null)
+	if [ -n "$sz" ]; then
+		printf '  %-20s %s 512B blocks = %s MiB\n' "$b" "$sz" "$((sz / 2048))"
+	else
+		printf '  %-20s (size unreadable)\n' "$b"
+	fi
+	show "$b/removable" "$b removable"
+done
+[ -n "$sd" ] || printf '  (no mmcblk0/mmcblk1/sda — no SD-card device to size)\n'
+
+sec "arming tryboot from userspace"
+# systemd >= 254 arms tryboot via /run/systemd/reboot-param. If it is too old,
+# the fallback is the same mailbox property the kernel driver issues
+# (RPI_FIRMWARE_SET_REBOOT_FLAGS) over /dev/vcio — same shape as rs485ctl.
+if [ -c /dev/vcio ]; then
+	printf '  /dev/vcio: present (mailbox reachable from userspace)\n'
+	printf '           -> SET_REBOOT_FLAGS wrapper is the systemd-free route\n'
+else
+	printf '  /dev/vcio: absent (no userspace mailbox route; systemd route only)\n'
+fi
+if [ -d /run/systemd ]; then
+	show /run/systemd/reboot-param "/run/systemd/reboot-param (armed now?)"
+else
+	printf '  /run/systemd absent (not a systemd system)\n'
+fi
 
 sec "SWUpdate / OTA status"
 for c in swupdate swupdate-client; do

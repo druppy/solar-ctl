@@ -182,6 +182,15 @@
   on a `static struct dict` = **RAM only, returns success, gone at reboot**. So
   `ustate`/`swupdate-env`/`bootstate=`/`set_bootloader_state` silently persist
   nothing → keep all boot-state bookkeeping in `/data` yourself.
+  **Escape hatch (verified in swupdate 2026.05.1 sources, no C needed):**
+  `CONFIG_BOOTLOADER_GRUB=y` is a *file-backed* env and `GRUBENV_PATH` is a
+  **Kconfig string**, not hardcoded — point it at ext4 `/data` and those calls
+  really persist. Costs: the file must be **exactly 1024 bytes** with the
+  `# GRUB Environment Block\n` header (pre-create it; writes go via
+  `grubenv.new`+rename, so same-fs only), and it reports "grub" on a board with
+  no GRUB. **Trap:** the `choice "Default Bootloader Interface"` has no `default`
+  statement, so making GRUB *visible* silently flips the default off `none`
+  (GRUB precedes NONE in the choice) — pin `BOOTLOADER_DEFAULT_NONE` explicitly.
 - `overlayfs-etc.bbclass` (oe-core) is the `/etc` mechanism, BUT its default
   `OVERLAYFS_ETC_CREATE_MOUNT_DIRS=1` does `mount -o remount,rw /` — on a
   squashfs root that can never work. Set it to `0` and pre-create `/data`.
@@ -246,6 +255,28 @@
   '^(PV|SRCREV|RPIFW_DATE)='` (PV=`${RPIFW_DATE}`), or the
   `rpi-bootfiles-<PV>.stamp` in the deploy dir; `vcgencmd version` needs
   libraspberrypi-bin (not installed). Bench probe: `fw/tools/ota-probe.sh`.
+- **An RPi bootloader backend for SWUpdate is feasible but deferred** (doc §6.6):
+  `doc/source/bootloader_interface.rst` documents the extension point (4 patch
+  points: `bootloader/rpi.c` + a `BOOTLOADER_*` define in `include/bootloader.h`
+  + Kconfig entry and a `BOOTLOADER_DEFAULT_*` choice entry + one `obj-` line);
+  backends are keyed by **string**, not enum, and `core/bootloader.c` skips
+  entries whose `funcs` is NULL. Why not worth it: the interface is a key/value
+  env and **the Pi has no such thing** (boot choice = which file the firmware
+  reads + a one-shot flag), `env_get` cannot read tryboot back (no getter, only
+  `SET_REBOOT_FLAGS`), and per-variable `env_set` means FAT writes on p1. Note
+  `bootloader_interface.rst`'s supported list is **stale** (omits `cboot`).
+  Revisit trigger: stage-3 `SURICATTA`/Hawkbit boot-state reporting.
+- **Bench protocol is doc §8** (tests 0–5, each with commands + what decision it
+  flips + a re-evaluation matrix), not a 4-row table any more. Key property:
+  `tryboot` is consumed pre-kernel, so a wrong answer **reboots back to
+  `config.txt` by itself** — nothing can brick the board, and nothing can be
+  verified *before* the reboot (evidence = `/proc/cmdline` + serial log after).
+  Fallback if `start.elf` won't vary the cmdline per boot is **not** rewriting
+  `cmdline.txt` (every boot needs it → corrupt = truck roll) but a small
+  **initramfs** that picks the slot from a marker on `/data` and `switch_root`s
+  by ext4 label. `ota-probe.sh` is strictly read-only, busybox-ash safe
+  (validated with `busybox sh` + `busybox awk`), and takes `OTA_PROBE_BOOT=<dir>`
+  to inspect a card in a bench reader.
 
 ## Editor on target
 - Use **busybox `vi`** — decided 2026-09 after evaluating classic nvi 1.81.6:
