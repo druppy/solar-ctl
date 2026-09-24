@@ -833,8 +833,30 @@ Then update §5 (which tier is the plan of record), this matrix, and `.rules`.
   N-1. Keep app config in `/data`, keep `/etc` diffs minimal. Factory reset =
   wipe `/data/overlay/overlay-etc/upper`.
 - Never OTA `bootcode.bin`/`start.elf` — a corrupt GPU firmware is a JTAG-and-
-  swap-card recovery, i.e. a truck roll. Only ever *add* to p1; keep a known
-  good `config.txt`/`tryboot.txt` pair.
+  swap-card recovery, i.e. a truck roll. From any **update** path, only ever
+  *add* to p1; keep a known good `config.txt`/`tryboot.txt` pair. (The one
+  permitted exception is the supervised firmware maintenance op two bullets
+  below, where a human with serial and power control is present.)
+- **No runtime firmware updater exists in this stack.** The boot files come from
+  `rpi-bootfiles`, which pins `raspberrypi/firmware` to a `SRCREV`
+  (`RPIFW_DATE ?= "20250801"`, `PV = ${RPIFW_DATE}`) and *deploys* them at build
+  time `[wrynose]`. `meta-raspberrypi` has **no** `rpi-update` recipe — no such
+  path on the `wrynose` branch and a layer-scoped code search returns zero hits
+  `[wrynose]` — so nothing can drag the upstream runtime updater into an image by
+  an `IMAGE_INSTALL` typo, and there is nothing to wrap in SWUpdate.
+  `rpi-eeprom` does exist, but its `COMPATIBLE_MACHINE` is `raspberrypi4`,
+  `raspberrypi4-64` and `raspberrypi5` only; a Zero W has no EEPROM `[wrynose]`.
+- **When a firmware fix is genuinely needed it is a maintenance op, not an OTA.**
+  This is the gap the bullet above leaves open: p1 is shared by both slots, so no
+  slot switch can carry a firmware change. The procedure is to bump
+  `rpi-bootfiles`, rebuild, and update p1 as a **supervised bench operation**
+  (serial attached, stable power) — never from a SWUpdate path, because rewriting
+  `start.elf`/`bootcode.bin` in place is the one action in this design that can
+  actually brick. It is the same deliberately non-atomic class as the
+  kernel/modules hazard below. Record `bitbake -e rpi-bootfiles` plus its
+  `PV`/`SRCREV`/`RPIFW_DATE` before and after, then confirm what really booted
+  from `/chosen/bootloader/version` (test 0 and `ota-probe.sh` both dump it);
+  `vcgencmd version` would need `libraspberrypi-bin`, which we do not install.
 - **Kernel/modules coherence is the one thing A/B does not automatically buy us
   here.** `start.elf` can only load the kernel from the FAT partition
   `[reported]`, so there is **one** `kernel*.img` shared by both slots while

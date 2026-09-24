@@ -255,6 +255,18 @@
   '^(PV|SRCREV|RPIFW_DATE)='` (PV=`${RPIFW_DATE}`), or the
   `rpi-bootfiles-<PV>.stamp` in the deploy dir; `vcgencmd version` needs
   libraspberrypi-bin (not installed). Bench probe: `fw/tools/ota-probe.sh`.
+- **No runtime firmware updater exists in this stack** (verified 2026-09-24
+  against meta-raspberrypi `wrynose`): there is **no `rpi-update` recipe** (no
+  matching path, and a layer-scoped code search returns zero hits — the tool
+  lives upstream in `Hexxeh/rpi-update`, unpackaged). Boot files come from
+  `rpi-bootfiles`, which pins `raspberrypi/firmware` to a SRCREV
+  (`RPIFW_DATE ?= "20250801"`) and deploys them at build time; `rpi-eeprom`
+  exists but its COMPATIBLE_MACHINE is only raspberrypi4, raspberrypi4-64 and
+  raspberrypi5 (a Zero W has no EEPROM). Consequence for A/B: a firmware fix is a
+  `rpi-bootfiles` bump + rebuild + **supervised p1 maintenance op on the bench**,
+  never an OTA path — p1 is shared by both slots, so no slot switch can carry a
+  firmware change, and rewriting `start.elf`/`bootcode.bin` in place is the one
+  brick-capable action here (doc §9).
 - **An RPi bootloader backend for SWUpdate is feasible but deferred** (doc §6.6):
   `doc/source/bootloader_interface.rst` documents the extension point (4 patch
   points: `bootloader/rpi.c` + a `BOOTLOADER_*` define in `include/bootloader.h`
