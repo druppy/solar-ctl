@@ -249,13 +249,13 @@ what §6.6 cannot: a real persistent env (`fw_env`), native
 interesting one — **per-slot kernel + modules**, which dissolves the §9
 coherence hazard for free. What wrynose actually does `[wrynose]`:
 
-| Fact                                                                                                            | Source                          |
-|-----------------------------------------------------------------------------------------------------------------|---------------------------------|
-| `raspberrypi0-wifi.conf` sets `UBOOT_MACHINE ?= "rpi_0_w_defconfig"`                                            | machine conf                    |
-| u-boot is gated behind `RPI_USE_U_BOOT = "1"` (unset ⇒ firmware boots)                                          | `rpi-base.inc`                  |
-| enabled ⇒ `KERNEL_IMAGETYPE`→`uImage`, `u-boot.bin;${SDIMG_KERNELIMAGE}` and `boot.scr` join `IMAGE_BOOT_FILES` | `rpi-base.inc`                  |
-| upstream still ships `configs/rpi_0_w_defconfig`                                                                | `U-Boot/u-boot` master          |
-| `RPI_USE_U_BOOT=1` + `ENABLE_UART=0` is a **hard `bbfatal`**; otherwise it force-appends `enable_uart=1`        | `rpi-config_git.bb:191-200`     |
+| Fact                                                                                                              | Source                            |
+|-------------------------------------------------------------------------------------------------------------------|-----------------------------------|
+| `raspberrypi0-wifi.conf` sets `UBOOT_MACHINE ?= "rpi_0_w_defconfig"`                                              | machine conf                      |
+| u-boot is gated behind `RPI_USE_U_BOOT = "1"` (unset ⇒ firmware boots)                                            | `rpi-base.inc`                    |
+| enabled ⇒ `KERNEL_IMAGETYPE`→`uImage`, `u-boot.bin;${SDIMG_KERNELIMAGE}` and `boot.scr` join `IMAGE_BOOT_FILES`   | `rpi-base.inc`                    |
+| upstream still ships `configs/rpi_0_w_defconfig`                                                                  | `U-Boot/u-boot` master            |
+| `RPI_USE_U_BOOT=1` + `ENABLE_UART=0` is a **hard `bbfatal`**; otherwise it force-appends `enable_uart=1`          | `rpi-config_git.bb:191-200`       |
 
 That last row is the objection that ends the argument, and it is now an
 upstream guard rather than my inference: booting u-boot on this machine pins
@@ -558,23 +558,43 @@ Read the repo for what it proves, not as a recipe. Checked first-hand on
 GitHub: last commit 2016-08-26, a **Buildroot** external tree, Shell.
 `[reported]`
 
-| What the demo does                                                                                                       | Does it transfer here?                                                                                                                   |
-|--------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
-| `config.txt` sets `kernel=u-boot.bin` (u-boot masquerades as the kernel)                                                 | Yes — and `RPI_USE_U_BOOT=1` emits exactly this on wrynose `[wrynose]`                                                                   |
-| p2 = kernel+rootfs-1, p3 = kernel+rootfs-2 (**per-slot kernel**)                                                         | The one genuinely valuable idea; it removes the §9 hazard                                                                                |
-| hand-rolled hush script: `which_fs_part`, `test_count 3`, `setexpr part ${part} ^ 1`, `saveenv`, custom `update_verif`   | Still ours to write — stock `boot.cmd.in` has no A/B, no bootcount `[wrynose]`                                                           |
-| `overlay/etc/fw_env.config`, pre-baked `uboot.env(.img)`, `0001-fix-config-file-loading-in-env-library.patch`            | libubootenv friction is real, and 2016-era                                                                                               |
-| DTB `bcm2708-rpi-b-plus.dtb`, `bootz`, `ext2load` of an ext2 root                                                        | No — Pi 1/B+ era, not Zero W; our slots are squashfs, not ext2                                                                           |
-| its script hand-rolls no `bootcount`/`altbootcmd`/`distro_bootcmd`                                                       | **Misleading yardstick**: mainline had them *before* the demo (`bootcount_env` 2013-11, `config_distro_bootcmd.h` 2014-08) `[wrynose]`   |
+| What the demo does                                                                                                         | Does it transfer here?                                                                                                                     |
+|----------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
+| `config.txt` sets `kernel=u-boot.bin` (u-boot masquerades as the kernel)                                                   | Yes — and `RPI_USE_U_BOOT=1` emits exactly this on wrynose `[wrynose]`                                                                     |
+| p2 = kernel+rootfs-1, p3 = kernel+rootfs-2 (**per-slot kernel**)                                                           | The one genuinely valuable idea; it removes the §9 hazard                                                                                  |
+| hand-rolled hush script: `which_fs_part`, `test_count 3`, `setexpr part ${part} ^ 1`, `saveenv`, custom `update_verif`     | Still ours to write — stock `boot.cmd.in` has no A/B, no bootcount `[wrynose]`                                                             |
+| `overlay/etc/fw_env.config`, pre-baked `uboot.env(.img)`, `0001-fix-config-file-loading-in-env-library.patch`              | libubootenv friction is real, and 2016-era                                                                                                 |
+| DTB `bcm2708-rpi-b-plus.dtb`, `bootz`, `ext2load` of an ext2 root                                                          | No — Pi 1/B+ era, not Zero W; our slots are squashfs, not ext2                                                                             |
+| its script hand-rolls no `bootcount`/`altbootcmd`/`distro_bootcmd`                                                         | **Misleading yardstick**: mainline had them *before* the demo (`bootcount_env` 2013-11, `config_distro_bootcmd.h` 2014-08) `[master]`      |
 
-That last row corrects a note I wrote earlier from memory. Verified against the
-upstream history, `distro_bootcmd` landed 2014-08-09 (`2a43201a13`), its doc
-2015-01-30, and the bootcount env backend 2013-11-11 — so the demo hand-rolled
-things u-boot already provided, which means **the demo under-sells u-boot**: a
-2026 A/B script is much shorter than that repo suggests. It is still only
-evidence that the per-slot-kernel layout works — which `[bench]` test 1c
-(`kernel=` stanzas per slot) is designed to give us **without** a second
-bootloader.
+That last row corrects a note I wrote earlier from memory, and the claim is
+documented rather than folklore. The A/B-shaped variables are specified in the
+**Boot Count Limit** doc, `doc/api/bootcount.rst`: `bootcount` starts at 1,
+increments each reboot while `upgrade_available` is non-zero, and when it
+exceeds `bootlimit` the firmware runs `altbootcmd` instead of `bootcmd` — which
+is the retry-and-fallback mechanism the demo hand-wrote. `doc/develop/distro.rst`
+documents `distro_bootcmd`/`$bootcmd` (`config_distro_bootcmd.h`). Two traps for
+the next reader: there is **no** `doc/README.bootcount` on master (it moved to
+`doc/api/bootcount.rst`), and `doc/README.autoboot` does **not** mention
+`altbootcmd` — it defers to the main README. `doc/usage/cmd/bootmeth.rst` also
+covers `altbootcmd`, but in bootstd/bootmeth terms. Upstream history puts
+`distro_bootcmd` at 2014-08-09 (`2a43201a13`, "config: introduce a generic
+$bootcmd"), its doc at 2015-01-30, and the bootcount env backend at 2013-11-11
+(`eda0ba38a8`) — all years before the demo. `[master]`
+
+Mainline even ships the exact shape we would want: `CONFIG_BOOTCOUNT_ALTBOOTCMD`
+is a default-env variable (`include/env_default.h`), and in-tree defconfigs use
+it for A/B rollback — `configs/lxr2_defconfig` sets it to `"run swupdate"`, and
+`configs/smegw01_defconfig` flips `mmcpart`/`mmcpart_committed` to the other
+copy and resets `bootcount` `[master]`. So a u-boot A/B is **glue around
+features that already exist**, which means the demo *under-sells* u-boot: a 2026
+script is much shorter than that repo suggests. It is still only evidence that
+the per-slot-kernel layout works — which `[bench]` test 1c (`kernel=` stanzas
+per slot) is designed to give us **without** a second bootloader.
+
+The objection to Tier 3 is therefore **not** missing functionality; it is the
+BCM2835 boot chain (a second stage that can brick, `u-boot.bin` shipped as
+`kernel.img`) and the forced console on GPIO14/15 (§5 Tier 3).
 
 **Decision: stay Tier 1.** Reopen Tier 3 only if **both** hold: (a) test 1c
 shows `kernel=` is not honoured per boot on BCM2835, so a slot-coherent kernel
