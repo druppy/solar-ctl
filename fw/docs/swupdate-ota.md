@@ -243,9 +243,30 @@ a second FAT-ish layout decision.
 
 ### Tier 3 — U-Boot + `bootcount`
 
-Explicitly **rejected**: adds a second bootloader, a `distro_feature`, and
-a boot chain we would have to debug over one serial line on a board whose only
-UART is already contested by RS485.
+**Rejected, but buildable** (verified on the branch, not assumed). It would buy
+what §6.6 cannot: a real persistent env (`fw_env`), native
+`bootcount`/`altbootcmd`, `CONFIG_UBOOT=y` in SWUpdate, and — the genuinely
+interesting one — **per-slot kernel + modules**, which dissolves the §9
+coherence hazard for free. What wrynose actually does `[wrynose]`:
+
+| Fact                                                                                                            | Source                          |
+|-----------------------------------------------------------------------------------------------------------------|---------------------------------|
+| `raspberrypi0-wifi.conf` sets `UBOOT_MACHINE ?= "rpi_0_w_defconfig"`                                            | machine conf                    |
+| u-boot is gated behind `RPI_USE_U_BOOT = "1"` (unset ⇒ firmware boots)                                          | `rpi-base.inc`                  |
+| enabled ⇒ `KERNEL_IMAGETYPE`→`uImage`, `u-boot.bin;${SDIMG_KERNELIMAGE}` and `boot.scr` join `IMAGE_BOOT_FILES` | `rpi-base.inc`                  |
+| upstream still ships `configs/rpi_0_w_defconfig`                                                                | `U-Boot/u-boot` master          |
+| `RPI_USE_U_BOOT=1` + `ENABLE_UART=0` is a **hard `bbfatal`**; otherwise it force-appends `enable_uart=1`        | `rpi-config_git.bb:191-200`     |
+
+That last row is the objection that ends the argument, and it is now an
+upstream guard rather than my inference: booting u-boot on this machine pins
+the console via `enable_uart=1`, i.e. the UART on GPIO14/15 — the same pair
+`solar-rs485` claims (§Kernel / device-tree in `.rules`), and u-boot additionally
+wants an interruptible console. The stock `rpi-u-boot-scr` `boot.cmd.in` has
+**no A/B and no bootcount** and even takes `bootargs` from the DTB `/chosen`,
+so the per-slot boot script is ours to write either way. Net cost: a second
+boot stage that can brick, a UART fight, and a new non-A/B artifact
+(`u-boot.bin` shipped as `kernel.img`). Still **rejected** — §6.7 has the demo
+comparison and the two conditions that would reopen this.
 
 ---
 
@@ -518,11 +539,48 @@ zero new code. Costs:
 - it **lies about the board**: logs and status will say "grub" on a machine
   that has never seen GRUB.
 
+> **Do not read "GRUB" as a bootloader here.** `start.elf` on BCM2835 cannot
+> load GRUB, and `BOOTLOADER_GRUB` does **not** switch slots — it only backs the
+> key/value env with a file so those state calls persist. It is an optional
+> stage-3 escape hatch for *persistence*, nothing more. Plan of record is
+> unchanged: `BOOTLOADER_NONE` plus boot-state bookkeeping in `/data` (§6.5).
+> "No new C" is the only sense in which it is easier than a backend.
+
 **Decision: defer the backend.** If all we want is persistence, the GRUB-env
 trick beats ~300 lines of C plus a 4-file patch we would have to carry forever.
 If bench test 2 passes and the firmware owns A/B (Tier 2), a backend becomes
 actively pointless. **Trigger to revisit: stage 3**, when `SURICATTA`/Hawkbit
 wants real boot-state reporting — and even then, re-read this section first.
+
+### 6.7 What about a U-Boot A/B like `rboussel/SWUpdate-rpi-demo`?
+
+Read the repo for what it proves, not as a recipe. Checked first-hand on
+GitHub: last commit 2016-08-26, a **Buildroot** external tree, Shell.
+`[reported]`
+
+| What the demo does                                                                                                       | Does it transfer here?                                                                                                                   |
+|--------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
+| `config.txt` sets `kernel=u-boot.bin` (u-boot masquerades as the kernel)                                                 | Yes — and `RPI_USE_U_BOOT=1` emits exactly this on wrynose `[wrynose]`                                                                   |
+| p2 = kernel+rootfs-1, p3 = kernel+rootfs-2 (**per-slot kernel**)                                                         | The one genuinely valuable idea; it removes the §9 hazard                                                                                |
+| hand-rolled hush script: `which_fs_part`, `test_count 3`, `setexpr part ${part} ^ 1`, `saveenv`, custom `update_verif`   | Still ours to write — stock `boot.cmd.in` has no A/B, no bootcount `[wrynose]`                                                           |
+| `overlay/etc/fw_env.config`, pre-baked `uboot.env(.img)`, `0001-fix-config-file-loading-in-env-library.patch`            | libubootenv friction is real, and 2016-era                                                                                               |
+| DTB `bcm2708-rpi-b-plus.dtb`, `bootz`, `ext2load` of an ext2 root                                                        | No — Pi 1/B+ era, not Zero W; our slots are squashfs, not ext2                                                                           |
+| its script hand-rolls no `bootcount`/`altbootcmd`/`distro_bootcmd`                                                       | **Misleading yardstick**: mainline had them *before* the demo (`bootcount_env` 2013-11, `config_distro_bootcmd.h` 2014-08) `[wrynose]`   |
+
+That last row corrects a note I wrote earlier from memory. Verified against the
+upstream history, `distro_bootcmd` landed 2014-08-09 (`2a43201a13`), its doc
+2015-01-30, and the bootcount env backend 2013-11-11 — so the demo hand-rolled
+things u-boot already provided, which means **the demo under-sells u-boot**: a
+2026 A/B script is much shorter than that repo suggests. It is still only
+evidence that the per-slot-kernel layout works — which `[bench]` test 1c
+(`kernel=` stanzas per slot) is designed to give us **without** a second
+bootloader.
+
+**Decision: stay Tier 1.** Reopen Tier 3 only if **both** hold: (a) test 1c
+shows `kernel=` is not honoured per boot on BCM2835, so a slot-coherent kernel
+is impossible without a bootloader; **and** (b) we give up `solar-rs485` on
+GPIO14/15 (or re-home RS485 to USB-serial / bit-banged UART). Until then u-boot
+buys a brick risk and a UART argument.
 
 ---
 
