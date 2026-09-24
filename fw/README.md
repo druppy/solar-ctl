@@ -97,6 +97,12 @@ flowchart LR
 
 115200 8N1, mini-UART (`ttyS0`), root auto-login on the lab image.
 
+> **Numbering caveat**: pinouts like pinout.xyz show three schemes per
+> pin. We use **BCM GPIO + physical pin** (`P1-nn`) — the kernel/DT
+> convention, same as the overlays. The third column (wiringPi, `wPi`)
+> reads **15/16 on pins 8/10** — that is legacy library numbering (its
+> TXD/RXD are wPi 15/16), not GPIO numbers; ignore it.
+
 ### NV3007 2.79" TFT (142×428 SPI, enabled by default)
 
 TZT 2.79" 142×428 SPI display with the NV3007 controller. It is driven
