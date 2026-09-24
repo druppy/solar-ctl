@@ -197,7 +197,11 @@
   Also conflicts with IMAGE_FEATURES `package-management`.
 - `overlayfs.bbclass` (for `/var`) requires the **`overlayfs` DISTRO_FEATURE,
   which is NOT in `DISTRO_FEATURES_DEFAULTS`** in fw/conf/distro/solar-ctl.conf
-  — must be added (+ kernel `CONFIG_OVERLAY_FS`). It refuses `/etc` by design.
+  — must be added. The kernel side is already there: `CONFIG_OVERLAY_FS=m`,
+  `CONFIG_SQUASHFS=m` (+`SQUASHFS_XZ=y`) in `bcmrpi_defconfig` (verified
+  2026-09-24 in work-shared, kernel 6.18.33) — the image merely lacks the
+  `kernel-module-overlay`/`kernel-module-squashfs` **packages**, not the
+  symbols. It refuses `/etc` by design.
   `/var/volatile` for RO rootfs is initscripts-only → systemd never runs it.
 - Slot switching: `tryboot` is the mechanism — firmware sets a one-shot flag,
   clears it, and loads `tryboot.txt` **instead of** `config.txt`. Kernel side
@@ -243,8 +247,10 @@
   tag v0.3.1, built as `wic-native`. Consequences: canned wks now live in
   **`<layer>/files/wic/`** (so ours goes in `fw/files/wic/`); `image_types_wic`
   gained an `IMAGER=direct` abstraction; plugin source (rawcopy) is only
-  greppable locally in `build/downloads/git2/git.yoctoproject.org.wic.git`.
-  Cloudflare still 403s the cgit **web** UI — if `wic-native` ever fails to
+  greppable locally in `build/downloads/git2/git.yoctoproject.org.wic.git`
+  (real path **`src/wic/plugins/source/rawcopy.py`**, not `lib/wic/…`).
+  `bitbake wic-native -c fetch` **PASSED 2026-09-24** — smart-HTTPS git works
+  even though Cloudflare still 403s the cgit **web** UI; if it ever fails to
   fetch, mirror wic.git to GitHub and override SRC_URI in a bbappend.
 - Hazards: `/etc` overlay upper is **shared by both slots and survives
   rollback** (factory reset = wipe the upper dir; app config belongs in
@@ -308,6 +314,16 @@
   by ext4 label. `ota-probe.sh` is strictly read-only, busybox-ash safe
   (validated with `busybox sh` + `busybox awk`), and takes `OTA_PROBE_BOOT=<dir>`
   to inspect a card in a bench reader.
+- **Bench 2026-09-24 (retested same day; `fw/docs/bench-2026-09-24.md`, firmware
+  20250801):** 1a PASS (11 s vs 6 s), 1b FAIL (`cmdline=` ignored), 1c FAIL
+  (`kernel=` ignored) → classic Tier 1 dead. Test 2 PASS: `autoboot.txt` is
+  parsed; channel is `/chosen/bootloader/partition` (1 unarmed → 9 armed),
+  not `partnum`. Bogus p9 self-heals same boot. Tier 2 live but landing on a
+  second FAT unproven. Live routes: **Tier 1-alt (proven)** + **Tier 2 (parse
+  only)**. Tier 3 stays closed (RS485 on GPIO14/15). Test 3 PASS (FAT marker
+  survives power pull). Test 4 ≈10/21 MB/s. Bugs: no WiFi firmware in image;
+  root never resized (135 MB on 122 GB). Serial: CH341 `/dev/ttyUSB0` (FT232R
+  dead). Do not OTA `bootcode.bin`/`start.elf`.
 
 ## Editor on target
 - Use **busybox `vi`** — decided 2026-09 after evaluating classic nvi 1.81.6:

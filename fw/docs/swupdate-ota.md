@@ -88,13 +88,14 @@ a normal recipe:
    tool, not a replacement. Neither "switched to another tool" nor "integrated
    into the image build".
 2. **Fetch risk:** `wic-native` is fetched from `git.yoctoproject.org`, which
-   our `.rules` record as Cloudflare-403 (re-confirmed today: the cgit web UI
-   returns a Cloudflare challenge). Our builds do produce `wic.bz2`, so smart
-   HTTPS git access evidently works where the web UI does not — but it is one
-   Cloudflare policy change away from breaking every build. `[bench]`: run
-   `bitbake wic-native -c fetch` and if it fails, add a
-   `wic_%.bbappend` pointing `SRC_URI` at a GitHub fork we control (same trick
-   as the layer mirrors).
+   our `.rules` record as Cloudflare-403. **`[bench]` 2026-09-24 — PASSED:**
+   `bitbake wic-native -c fetch` succeeded on the build host (clone now at
+   `build/downloads/git2/git.yoctoproject.org.wic.git`, tags `v0.3.0` and
+   `v0.3.1` present), so smart-HTTPS git works even where the cgit web UI
+   returns a Cloudflare challenge. The risk stands — one Cloudflare policy
+   change from breaking every build — and the escape hatch remains unwritten:
+   a `wic_%.bbappend` pointing `SRC_URI` at a GitHub fork we control (same
+   trick as the layer mirrors).
 3. To read plugin behaviour (`rawcopy`, `bootimg-pcbios`, …) we can no longer
    grep `layers/openembedded-core/scripts/lib/wic`. It is in the **wic repo**,
    and after a build the only local copy is the download mirror, which
@@ -102,12 +103,13 @@ a normal recipe:
 
    ```sh
    git --no-pager -C build/downloads/git2/git.yoctoproject.org.wic.git log --oneline -n 3
-   git --no-pager -C build/downloads/git2/git.yoctoproject.org.wic.git show v0.3.1:lib/wic/plugins/source/rawcopy.py
+   git --no-pager -C build/downloads/git2/git.yoctoproject.org.wic.git show v0.3.1:src/wic/plugins/source/rawcopy.py
    ```
 
-   The exact path inside the repo (`lib/wic/plugins/source/rawcopy.py`) is
-   `[inferred]` from the old oe-core layout + `python_hatchling`; confirm with
-   `git ls-tree -r --name-only v0.3.1 | grep -i rawcopy`. `[bench]`
+   `[bench]` 2026-09-24: path confirmed — it is **`src/wic/plugins/source/rawcopy.py`**;
+   the earlier `lib/wic/…` guess (`[inferred]` from the old oe-core layout) was
+   wrong. `git ls-tree -r --name-only v0.3.1 | grep -i rawcopy` returns exactly
+   that one plugin (plus `pluginbase.py` / `plugins/imager/direct.py`).
 
 ---
 
@@ -132,14 +134,20 @@ No U-Boot ⇒ the **RPi firmware owns which root we boot**. Two mechanisms:
   echo '0 tryboot' > /run/systemd/reboot-param && systemctl reboot
   ```
 
-### 3.2 `autoboot.txt` (partition-select style) — attractive, unproven here
+### 3.2 `autoboot.txt` (partition-select style) — attractive, now PROVEN on BCM2835
 
 `[wrynose]` `config_txt/autoboot.adoc`: `boot_partition=<n>` plus
 `tryboot_a_b=1` and a `[tryboot]` section, with a six-partition reference
 layout and a "commit by rewriting the file" flow. The `[tryboot]` section,
 `cmdline=` and `os_prefix` carry **no model restriction** in the docs.
-**Undocumented whether the legacy BCM2835 `start.elf` honours `autoboot.txt`**
-(the file predates the Pi 4 EEPROM boot flow) → `[bench]` test 2.
+**`[bench]` 2026-09-24 test 2: the legacy BCM2835 `start.elf` (20250801) DOES
+parse `autoboot.txt` and honour `[all]`/`[tryboot] boot_partition=`** — the
+`partition` u32 in `/chosen/bootloader` tracks the choice (`0` with no file,
+`1` with `[all]=1`, `9` with armed `[tryboot]=9`); an impossible target did not
+hang the boot, the firmware fell back to tryboot.txt→p1 in the same boot.
+`partnum`/`version` never appear on this firmware — the DT channel is
+`partition`, not `partnum`. Still unproven: that boot *lands* on a second FAT
+partition chosen by `boot_partition` (bench SD has only one FAT partition).
 Do **not** extrapolate from `boot_count`/`boot_arg1` (Pi 5 only) or
 `bootvar0` (Pi 4+).
 
@@ -221,7 +229,7 @@ GPT-only artefact.
 Squashfs slots must be **fixed size ≥ payload** — a slot that is 1 KB too
 small is a failed install, so leave headroom and assert it in CI.)
 
-### Tier 1 — one FAT, per-slot cmdline (plan of record)
+### Tier 1 — one FAT, per-slot cmdline (DEMOTED by `[bench]` 2026-09-24)
 
 p1 holds `bootcode.bin`, `start.elf`, `config.txt`, `tryboot.txt`,
 `kernel*.img`, `*.dtb`, `overlays/`, and **`cmdline_a.txt` /
@@ -231,15 +239,31 @@ slot, then rewrites one FAT text file to switch. No repartitioning, no
 partition-table writes — the SD geometry never changes, which is exactly what
 you want when an OTA fails on a box that is unreachable on a roof.
 
-Feasibility of `[cmdline]`/`kernel=` per boot on BCM2835 `start.elf` is
-`[bench]` test 1 in §8.
+**Bench verdict: as drawn, dead.** `[bench]` test 1 (firmware 20250801):
+1a PASS — `tryboot.txt` replaces `config.txt` when armed (`boot_delay=5` Δ
+measured 11 s vs 6 s control); 1b **FAIL** — `cmdline=` in tryboot.txt is
+ignored (file demonstrably loaded, `/proc/cmdline` unchanged); 1c **FAIL** —
+`kernel=` with a missing file did not stop the boot. Per-slot cmdline/kernel
+selection on BCM2835 is off the table; what survives is **Tier 1-alt** (§8):
+small initramfs reads the slot marker and `switch_root`s by ext4 label —
+zero firmware cooperation beyond 1a's tryboot file-swap (which isn't even
+needed there).
 
-### Tier 2 — `autoboot.txt` partition select
+### Tier 2 — `autoboot.txt` partition select (LIVE again — test 2 PASSED)
 
 `autoboot.txt` with `boot_partition=` + `tryboot_a_b=1`, roots as separate
 partitions, commit = rewrite `autoboot.txt`. Only if test 2 shows the legacy
 firmware honours it. Nicer semantics (firmware owns "which partition"), costs
 a second FAT-ish layout decision.
+
+**Bench verdict 2026-09-24: the legacy start.elf parses `autoboot.txt` and
+honours `[all]`/`[tryboot] boot_partition=`** (evidence + method in §8 test 2
+and the bench sheet; DT channel is the `partition` u32, not `partnum`), and a
+bogus target self-heals via same-boot fallback. One proof-point remains before
+this can *lead*: that the boot actually lands on a second FAT partition whose
+`cmdline.txt` differs — the bench SD has only one FAT partition, so landing
+was never exercised, only parsing + selection. Needs a milestone card with
+p1+p1b (see §10).
 
 ### Tier 3 — U-Boot + `bootcount`
 
@@ -596,11 +620,18 @@ The objection to Tier 3 is therefore **not** missing functionality; it is the
 BCM2835 boot chain (a second stage that can brick, `u-boot.bin` shipped as
 `kernel.img`) and the forced console on GPIO14/15 (§5 Tier 3).
 
-**Decision: stay Tier 1.** Reopen Tier 3 only if **both** hold: (a) test 1c
-shows `kernel=` is not honoured per boot on BCM2835, so a slot-coherent kernel
-is impossible without a bootloader; **and** (b) we give up `solar-rs485` on
-GPIO14/15 (or re-home RS485 to USB-serial / bit-banged UART). Until then u-boot
-buys a brick risk and a UART argument.
+**Decision: stay Tier 1/1-alt.** Reopen Tier 3 only if **both** hold: (a) test
+1c shows `kernel=` is not honoured per boot on BCM2835, so a slot-coherent
+kernel is impossible without a bootloader; **and** (b) we give up `solar-rs485`
+on GPIO14/15 (or re-home RS485 to USB-serial / bit-banged UART). Until then
+u-boot buys a brick risk and a UART argument.
+
+> **`[bench]` 2026-09-24:** condition (a) is now **true** (1c: `kernel=` not
+> honoured). (b) remains false, so **Tier 3 stays closed** — but the per-slot-
+> kernel gap is now real: kernel/modules coherence moves to §9 as a live
+> hazard, mitigated by pinning the kernel and per-slot `/lib/modules` discipline
+> (or by bench test 1c's alternative, per-slot kernel+modules on the
+> initramfs/Tier 2 route).
 
 ---
 
@@ -638,6 +669,10 @@ Two properties make this safe, and both shape the protocol:
 assume `/boot`). Record every run in `fw/docs/bench-<date>.md` and paste the
 decision into the matrix at the end.
 
+> **Status 2026-09-24 (retested same day):** 1a PASS / 1b FAIL / 1c FAIL /
+> 2 PASS / 3 PASS / 4 PASS. Sheet: `fw/docs/bench-2026-09-24.md`. Test 5 waits
+> on the §10 step-3 image.
+
 ### Arming tryboot
 
 ```sh
@@ -668,6 +703,9 @@ or `rw`, SD size, `/chosen/bootloader/{version,partnum}` presence, `/dev/vcio`.
 by itself.
 
 ### Test 1 — is `tryboot.txt` honoured, and can it change the cmdline?
+
+> **RESULT:** 1a PASS (11 s vs 6 s), 1b FAIL (`cmdline=` ignored), 1c FAIL
+> (`kernel=` ignored). Classic Tier 1 is dead — see §5.
 
 This is the Tier 1 load-bearing question, in three parts. Frame honestly:
 whether `cmdline=`/`kernel=` exist **and are honoured** by legacy `start.elf`
@@ -728,6 +766,10 @@ firmware-owned option.
 
 ### Test 2 — does legacy `start.elf` read `autoboot.txt`?
 
+> **RESULT: YES.** `partition` 1 (unarmed `[all]=1`) → 9 (armed `[tryboot]=9`);
+> bogus p9 self-heals same boot. Channel is `partition`, not `partnum`. Landing
+> on a second FAT is still unproven.
+
 **Purpose:** Tier 2, i.e. firmware-owned A/B. §3.2 says the docs do not restrict
 `[tryboot]`/`boot_partition=` to newer models but the file predates the Pi 4
 EEPROM flow. Do not extrapolate from `boot_count`/`boot_arg1` (Pi 5) or
@@ -758,6 +800,9 @@ fails, Tier 1/1-alt is all there is.
 
 ### Test 3 — rewriting p1 (the commit mechanism)
 
+> **RESULT: PASS.** Marker survived >5 s unclean power pull. p1 is rw-by-default
+> in this image; "ro by default" is a step-3 property.
+
 **Purpose:** every tier switches slots by rewriting one FAT text file, so this
 is not "whether" but **how carefully**. Test the durability of that write.
 
@@ -777,6 +822,10 @@ provably unreachable by any update path, not merely "we promise not to".
 
 ### Test 4 — SD throughput and RAM headroom
 
+> **RESULT: PASS.** ≈10 MB/s write / ≈21 MB/s read (32 MiB on root; busybox dd
+> has no `conv=fsync`). ~350 MB slot ≈ 40–60 s. Root is 135 MB on a 122 GB card
+> (resize never ran).
+
 **Purpose:** a ~350 MB slot has to stream over a slow SD card on a board that
 cannot double-buffer it (§6.3). `free`/`MemTotal` come from test 0; this adds
 speed.
@@ -794,6 +843,9 @@ too slow means a bigger block size / smaller root, not a new design.
 
 ### Test 5 — RO root + `/etc` overlay (needs §10 step 3 built)
 
+> **Not run** — needs the §10 step-3 image, including a first-boot resize
+> (today's root is 135 MB on a 122 GB card).
+
 **Purpose:** prove squashfs + `overlayfs-etc` + `/data` boot on this board at
 all, before any of it is load-bearing. **Do:** flash the milestone image, run
 the probe, edit a file under `/etc`, reboot, re-probe; then flip slots *by
@@ -809,18 +861,29 @@ switch (it should — that is the hazard in §9); hand-flip timings.
 
 ### Re-evaluation matrix
 
-| Bench outcome                             | Decision it forces                                                |
-| ----------------------------------------- | ----------------------------------------------------------------- |
-| 1a + 1b hold                              | Tier 1 stands as the plan of record                               |
-| 1a holds, 1b fails                        | Tier 1-alt: initramfs slot picker off `/data` (needs INITRD)      |
-| 1a fails                                  | `tryboot` dead here → Tier 2 if 2 passes, else manual pick        |
-| 1c fails to boot only when armed          | per-slot `kernel=` usable → kernel stays slot-coherent            |
-| 1c boots normally                         | drop per-slot kernels; kernel/modules coherence becomes a §9 risk |
-| 2a shows `partnum`, 2b fails to boot      | Tier 2 becomes plan of record; firmware owns A/B                  |
-| 2a shows nothing                          | Tier 2 is dead; Tier 1 / 1-alt only                               |
-| 3 marker survives a power pull            | commit = write + verify + fsync, p1 ro by default                 |
-| 3 marker lost                             | p1 writes need a second copy of every file it depends on          |
-| 4 ≥ 5 MB/s write                          | ~350 MB slot in ~70 s: fine, no design change                     |
+> From `fw/docs/bench-2026-09-24.md` (firmware 20250801, retested same day):
+
+| Bench outcome                             | Decision it forces                                                | Result |
+| ----------------------------------------- | ----------------------------------------------------------------- | ------ |
+| 1a + 1b hold                              | Tier 1 stands as the plan of record                               |        |
+| 1a holds, 1b fails                        | Tier 1-alt: initramfs slot picker off `/data` (needs INITRD)      |   ✅   |
+| 1a fails                                  | `tryboot` dead here → Tier 2 if 2 passes, else manual pick        |        |
+| 1c fails to boot only when armed          | per-slot `kernel=` usable → kernel stays slot-coherent            |        |
+| 1c boots normally                         | drop per-slot kernels; kernel/modules coherence becomes a §9 risk |   ✅   |
+| 2a shows `partnum`, 2b fails to boot      | Tier 2 becomes plan of record; firmware owns A/B                  |  ✅*   |
+| 2a shows nothing                          | Tier 2 is dead; Tier 1 / 1-alt only                               |        |
+| 3 marker survives a power pull            | commit = write + verify + fsync, p1 ro by default                 |  ✅†   |
+| 3 marker lost                             | p1 writes need a second copy of every file it depends on          |        |
+| 4 ≥ 5 MB/s write                          | ~350 MB slot in ~70 s: fine, no design change                     |   ✅   |
+
+\* Fired via the `partition` property, not `partnum`, and 2b **self-healed in
+the same boot instead of failing** — parsing + section-select + fallback all
+work. Not yet shown: booting *lands* on a second FAT partition
+(`boot_partition=2` with its own `cmdline.txt`). Tier 2 is live but not yet
+plan-of-record; Tier 1-alt is the only fully-proven route today.
+
+† Survived, but today p1 is rw-by-default; "ro by default" is a step-3
+milestone-image property, to be re-confirmed there.
 
 Then update §5 (which tier is the plan of record), this matrix, and `.rules`.
 
@@ -864,8 +927,9 @@ Then update §5 (which tier is the plan of record), this matrix, and `.rules`.
   kernel *and* rewrite the p1 kernel, then roll back to A, and p1 carries the
   new kernel over slot A's older `/lib/modules` `[inferred]`. Per-slot
   `kernel_a.img`/`kernel_b.img` stanzas fix it — which is exactly what
-  `[bench]` test 1c probes. If §8 test 1c says `kernel=` is not honoured, the
-  honest options are to pin the kernel (`SRCREV`) and treat a kernel bump as a
+  `[bench]` test 1c probes. **`[bench]` 2026-09-24: 1c came back NOT honoured**
+  — so the honest options are to pin the kernel (`SRCREV`) and treat a kernel
+  bump as a
   separate, deliberately non-atomic artifact, or accept that a rollback can
   strand an out-of-tree module. Our exposure is `panel-mipi-dbi`
   (`CONFIG_DRM_PANEL_MIPI_DBI=m` in `solar-ctl-slim.cfg`) `[wrynose]`; the RS485
@@ -897,8 +961,9 @@ Then update §5 (which tier is the plan of record), this matrix, and `.rules`.
    `.config` and fails if signing was silently dropped. Result:
    `swupdate_2026.05.1.bb` built on musl with lua 5.5.0, and the dumped config
    shows `SIGNED_IMAGES`/`HASH_VERIFY`/`BOOTLOADER_NONE`/`SYSTEMD` = y and
-   `UBOOT`/`MTD`/`SURICATTA` off, as intended. `[ci]` Not covered: the
-   `wic-native -c fetch` check from §2.1 (still open).
+   `UBOOT`/`MTD`/`SURICATTA` off, as intended. `[ci]` The `wic-native -c fetch`
+   check from §2.1 also **PASSED 2026-09-24** `[bench]` — nothing left open in
+   step 1.
 2. Bench tests 0–5 on the *current* layout/probe, per the protocol in §8;
    record results there.
 3. Read-only root + `overlayfs-etc` + `/var` overlay + `/data` on the
