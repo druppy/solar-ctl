@@ -80,6 +80,16 @@ local_conf_header:
     # Console on the mini-UART so we can log in without a monitor
     # (writes enable_uart=1 into config.txt).
     ENABLE_UART = "1"
+
+    # --- A/B OTA: U-Boot smoke (doc swupdate-ota.md, section 10 step 3) ----
+    # Boot Linux via U-Boot instead of start.elf loading the kernel
+    # directly: u-boot.bin is deployed as kernel.img and the stock
+    # rpi-u-boot-scr boot.scr does the rest. This is the ONLY new variable
+    # for the smoke image - no custom boot.cmd and no wks changes yet
+    # (both land with the A/B wks in step 4). ENABLE_UART must stay 1:
+    # U-Boot + UART=0 is a hard bbfatal in rpi-config_git.bb, and we want
+    # the GPIO14/15 console for the bench.
+    RPI_USE_U_BOOT = "1"
     # Zero's USB port is wired as peripheral-only; enable the DWC2 gadget
     # driver if you ever want g_ether (usb0) access from a laptop.
     # ENABLE_DWC2_PERIPHERAL = "1"

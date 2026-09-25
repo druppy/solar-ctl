@@ -204,6 +204,14 @@ Verified upstream plumbing:
   `OVERLAYFS_QA_SKIP[data] = "mount-configured"`. `[wrynose]`
 - `/var/volatile` handling for RO rootfs lives in **initscripts**, which
   systemd never runs → we must provide the overlay/tmpfiles ourselves.
+- **Why xz is not a RAM problem (checked 2026-09-25)**: squashfs
+  decompression is per-block and single-buffered — ~150 KiB transient peak
+  for a 128 KiB block, freed after each read; page-cache cost is identical
+  for all algorithms. xz's real cost is one-time CPU per file (slowest on
+  ARMv6); its benefit is ~2× smaller slot/`.swu` writes. All three
+  decompressors are already in the defconfig (`SQUASHFS_XZ/LZO/ZSTD=y`)
+  `[bench]` kernel 6.18.33 — if boot CPU ever shows up, `zstd` (near-xz
+  size, ~2–3× faster) is a one-word wks change.
 
 ---
 
@@ -338,6 +346,7 @@ enough? **Do not copy `bootcode.bin` onto p2 as an OTA path.**
 | enabled ⇒ `KERNEL_IMAGETYPE`→`uImage`, `u-boot.bin;${SDIMG_KERNELIMAGE}` and `boot.scr` join `IMAGE_BOOT_FILES`   | `rpi-base.inc`                    |
 | `RPI_USE_U_BOOT=1` + `ENABLE_UART=0` is a **hard `bbfatal`**; otherwise it force-appends `enable_uart=1`          | `rpi-config_git.bb:191-200`       |
 | stock `rpi-u-boot-scr` `boot.cmd.in` has no A/B / bootcount; bootargs from DTB `/chosen`                          | meta-rpi                          |
+| smoke image: `U-Boot 2026.01`, `bootcmd=bootflow scan`, `bootdelay=2`, prompt `U-Boot>`; banner → kernel in ~6 s, shell in ~40 s; any input byte inside the 2 s window interrupts autoboot (board waits at the prompt — not bricked) | `[bench]` 2026-09-25 |
 
 Keep `ENABLE_UART=1` (already on this image). Console on 14/15 during U-Boot is
 **wanted** for the bench; MAX485 isolation (DE pulldown, /RE pull-up) plus
@@ -1014,10 +1023,18 @@ Then update §5 (which tier is the plan of record), this matrix, and `.rules`.
 2. Bench tests 0–4 **DONE** 2026-09-24 (`fw/docs/bench-2026-09-24.md`). Classic
    Tier 1 is dead (`cmdline=`/`kernel=` ignored). Plan of record is **U-Boot +
    per-slot kernel** (§5).
-3. Next *image* (still one FAT + one ext4 root — no A/B yet): WiFi firmware
-   (already in the recipe), grow root at wic time, then a **U-Boot smoke image**
-   (`RPI_USE_U_BOOT=1`, `bootdelay=-2`, `ENABLE_UART=1`, overlay still off).
-   Confirm U-Boot loads Linux and serial is usable. Do not A/B until that boots.
+3. **U-Boot smoke image — DONE 2026-09-25 `[bench]`.** One FAT + one ext4
+   root, no A/B: WiFi firmware (in the recipe) plus exactly one new variable,
+   `RPI_USE_U_BOOT=1`. Evidence (tee'd serial, `build/smoke-*.log`):
+   `U-Boot 2026.01 (Jan 05 2026)` banner → `Hit any key to stop autoboot: 2`
+   runs to zero unattended → `bootflow scan` picks the stock `boot.scr` →
+   `## Booting kernel from Legacy Image` (uImage, checksum OK) → kernel in
+   ~6 s, shell in ~40 s. Prompt reachable (stock `U-Boot>`, `bootdelay=2`).
+   WiFi works end-to-end: `wlan0` up, WPA associated, DHCP `192.168.0.53/24`
+   (needed `kernel-module-brcmfmac-cyw` — see `.rules`). One autoboot was
+   interrupted by a stray byte in the 2 s window (open picocom?); the board
+   sat at `U-Boot>` — `boot` recovered it, nothing lost. Root sizing,
+   `bootdelay=-2` and the custom `boot.cmd` land with the step-4 wks.
 4. A/B kickstart `fw/files/wic/solar-ctl-ab.wks.in`: p1 vfat (GPU + `u-boot.bin`
    + `slot-a/`/`slot-b/` kernels) + p2/p3 **squashfs-xz** `rootfs-a`/`rootfs-b`
    + p4 ext4 `/data`. Custom `boot.cmd` with `bootcount`/`altbootcmd`.

@@ -296,7 +296,11 @@
   production `boot.scr` uses `bootdelay=-2`. Never OTA `u-boot.bin`/`start.elf`.
   Stock `rpi-u-boot-scr` has no A/B — we write `boot.cmd`. Env + `bootcount` live
   on ext4 `/data`, not FAT. Layout: p1 vfat (GPU+U-Boot + `slot-a/`/`slot-b/`
-  kernels) + p2/p3 squashfs-xz roots + p4 `/data`.
+  kernels) + p2/p3 squashfs-xz roots + p4 `/data`. Smoke-verified 2026-09-25:
+  U-Boot 2026.01 (musl) boots Linux via the stock `boot.scr` — `bootcmd=
+  bootflow scan`, `bootdelay=2`, prompt `U-Boot>`, banner→kernel ~6 s; an
+  input byte inside the 2 s window interrupts autoboot (board waits at the
+  prompt, not bricked).
 - **Bench protocol is doc §8** (tests 0–5, each with commands + what decision it
   flips + a re-evaluation matrix), not a 4-row table any more. Key property:
   `tryboot` is consumed pre-kernel, so a wrong answer **reboots back to
@@ -328,9 +332,14 @@
   compat185 bbappend for `dbopen()`. Not worth it for a Zero W image.
 
 ## Device facts
-- Zero W WiFi/BT chip: BCM43430. Firmware package is
-  `linux-firmware-rpidistro-bcm43430` in `IMAGE_INSTALL` (the machine-conf
-  RRECOMMENDS did not land it in the 2026-09-18 image). Driver `brcmfmac`.
+- Zero W WiFi/BT chip: BCM43430. `IMAGE_INSTALL` needs **both**
+  `linux-firmware-rpidistro-bcm43430` (the machine-conf RRECOMMENDS did not
+  land it in the 2026-09-18 image) **and** `kernel-module-brcmfmac-cyw`:
+  kernel 6.18 brcmfmac runtime-`request_module()`s the vendor firmware
+  plugin per chip (cyw/bca/wcc); the name is built at runtime in
+  `fwvid.c`, so modpost records no softdep ⇒ the package is never
+  auto-installed; without it `modprobe brcmfmac-cyw` fails and there is no
+  `wlan0` (seen 2026-09-25). Driver `brcmfmac`.
 - Console: UART 115200 8N1; image has dropbear but **root has no password**
   by default (set via serial `passwd`, or lab-only `empty-root-password`).
 - SSH policy: `/etc/default/dropbear` (our `dropbear.default` via the

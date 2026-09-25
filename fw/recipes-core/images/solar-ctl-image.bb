@@ -33,8 +33,14 @@ IMAGE_FEATURES += "allow-root-login empty-root-password serial-autologin-root"
 # in kas-rpi0.yml.
 MACHINE_EXTRA_RRECOMMENDS:remove = "kernel-modules bluez-firmware-rpidistro-bcm43430a1-hcd"
 
+# brcmfmac on kernel 6.18 runtime-requests a per-vendor firmware plugin
+# (brcmfmac-cyw for the 43430) via request_module(); the module name is
+# built at runtime (fwvid.c), so modpost records no softdep and the
+# package is never pulled in automatically - without it the modprobe
+# fails and no wlan0 appears. Install it explicitly.
 IMAGE_INSTALL:append = " \
     kernel-module-brcmfmac \
+    kernel-module-brcmfmac-cyw \
     linux-firmware-rpidistro-bcm43430 \
     wireless-regdb \
     wpa-supplicant \
