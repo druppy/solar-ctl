@@ -288,21 +288,15 @@
   BCM2835 cannot load GRUB and `BOOTLOADER_GRUB` does NOT switch slots — it only
   backs the key/value env with a file so the state calls persist. Plan of record
   stays `BOOTLOADER_NONE` + bookkeeping in `/data`.
-- **U-Boot (Tier 3) is buildable but rejected** (doc §5/§6.7): wrynose meta-rpi
-  gates it behind `RPI_USE_U_BOOT=1` and sets `UBOOT_MACHINE ?= "rpi_0_w_defconfig"`
-  for our machine; upstream still ships that defconfig; enabling it deploys
-  `u-boot.bin` as `kernel.img`. Killer objection is an upstream guard, not
-  inference: `rpi-config_git.bb` makes `RPI_USE_U_BOOT=1` + `ENABLE_UART=0` a hard
-  `bbfatal` and otherwise force-writes `enable_uart=1` — the console lands on
-  GPIO14/15, exactly where `solar-rs485` lives. Stock `rpi-u-boot-scr`
-  `boot.cmd.in` has no A/B/bootcount and reads bootargs from DTB `/chosen`, so
-  the per-slot hush script is ours either way. The `rboussel/SWUpdate-rpi-demo`
-  reference (2016, Buildroot, Pi1-era) is a misleading yardstick: it hand-rolls
-  `bootcount`/`distro_bootcmd` that mainline shipped in 2013-11/2014-08 (verified
-  against upstream history), so it under-sells u-boot. Its one valuable idea,
-  **per-slot kernel+modules** (fixes the §9 kernel/modules-coherence hazard), is
-  what bench test 1c gives us without a second bootloader. Reopen Tier 3 only if
-  1c shows `kernel=` isn't honoured per boot AND we give up RS485 on GPIO14/15.
+- **U-Boot is the plan of record for per-slot kernels** (doc §5): wrynose
+  `RPI_USE_U_BOOT=1` deploys `u-boot.bin` as `kernel.img` (`rpi_0_w_defconfig`).
+  `RPI_USE_U_BOOT=1` + `ENABLE_UART=0` is a hard `bbfatal`; we **keep**
+  `ENABLE_UART=1` (already on). UART vs RS485 is hardware: split MAX485 DE
+  (GPIO17, pulldown) from /RE (pull-up) so the chip is deaf+mute until Linux;
+  production `boot.scr` uses `bootdelay=-2`. Never OTA `u-boot.bin`/`start.elf`.
+  Stock `rpi-u-boot-scr` has no A/B — we write `boot.cmd`. Env + `bootcount` live
+  on ext4 `/data`, not FAT. Layout: p1 vfat (GPU+U-Boot + `slot-a/`/`slot-b/`
+  kernels) + p2/p3 squashfs-xz roots + p4 `/data`.
 - **Bench protocol is doc §8** (tests 0–5, each with commands + what decision it
   flips + a re-evaluation matrix), not a 4-row table any more. Key property:
   `tryboot` is consumed pre-kernel, so a wrong answer **reboots back to
@@ -319,8 +313,8 @@
   (`kernel=` ignored) → classic Tier 1 dead. Test 2 PASS: `autoboot.txt` is
   parsed; channel is `/chosen/bootloader/partition` (1 unarmed → 9 armed),
   not `partnum`. Bogus p9 self-heals same boot. Tier 2 live but landing on a
-  second FAT unproven. Live routes: **Tier 1-alt (proven)** + **Tier 2 (parse
-  only)**. Tier 3 stays closed (RS485 on GPIO14/15). Test 3 PASS (FAT marker
+  second FAT unproven. Plan of record after 1c + MAX485 isolation: **U-Boot +
+  per-slot kernel** (Tier 1-alt remains the no-second-stage fallback). Test 3 PASS (FAT marker
   survives power pull). Test 4 ≈10/21 MB/s. Bugs: no WiFi firmware in image;
   root never resized (135 MB on 122 GB). Serial: CH341 `/dev/ttyUSB0` (FT232R
   dead). Do not OTA `bootcode.bin`/`start.elf`.
@@ -334,8 +328,9 @@
   compat185 bbappend for `dbopen()`. Not worth it for a Zero W image.
 
 ## Device facts
-- Zero W WiFi/BT chip: BCM43430 (firmware `linux-firmware-rpidistro-bcm43430`
-  comes from the machine conf; driver `brcmfmac` installed in the image).
+- Zero W WiFi/BT chip: BCM43430. Firmware package is
+  `linux-firmware-rpidistro-bcm43430` in `IMAGE_INSTALL` (the machine-conf
+  RRECOMMENDS did not land it in the 2026-09-18 image). Driver `brcmfmac`.
 - Console: UART 115200 8N1; image has dropbear but **root has no password**
   by default (set via serial `passwd`, or lab-only `empty-root-password`).
 - SSH policy: `/etc/default/dropbear` (our `dropbear.default` via the

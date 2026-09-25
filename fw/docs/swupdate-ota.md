@@ -1,12 +1,9 @@
 # A/B OTA updates for solar-ctl (SWUpdate)
 
-**Status: design record + compile gate PASSED; nothing in an image yet.**
-Branch `swupdate_setup`.
-The gate question ("does SWUpdate build against our musl/wrynose distro?") is
-answered: **yes** — `swupdate_2026.05.1.bb` builds on musl in CI with our
-fragment applied, all four kconfig assertions holding (`[ci]` run 35926622985,
-artifact `swupdate-dotconfig-<merge-sha>`). The next unknowns are the bench
-tests (§10 step 2), not the toolchain.
+**Status: design record + musl compile gate PASSED + bench tests 0–4 DONE.**
+Nothing A/B in an image yet. Plan of record: **per-slot kernel via U-Boot
+(Tier 3)** — one slot = one kernel + modules + root (§5). Branch
+`swupdate_setup`. SWUpdate builds on musl (`[ci]` run 35926622985).
 This file is the research + design record so the next session does not have
 to re-derive any of it. The bench protocol that settles the remaining unknowns
 is §8, and the tool that starts it is `fw/tools/ota-probe.sh`. Facts carry a provenance label:
@@ -175,7 +172,7 @@ Do **not** extrapolate from `boot_count`/`boot_arg1` (Pi 5 only) or
 
 | Area     | Decision                                      | Why                                                             |
 | -------- | --------------------------------------------- | --------------------------------------------------------------- |
-| Root A/B | **squashfs, xz**                              | RO by construction, no fsck, no journal, ~50 % smaller          |
+| Root A/B | **squashfs-xz**                               | RO by construction, no fsck, ~50 % smaller. Kernel is *not* loaded from here (U-Boot xz) |
 | `root=`  | **`/dev/mmcblk0pN`** device nodes             | matches meta-raspberrypi's own `CMDLINE_ROOT_PARTITION` default |
 | `/etc`   | OE-core **`overlayfs-etc`** image feature     | upstream, systemd-aware, factory-reset = wipe upper dir         |
 | `/var`   | explicit overlay via **`overlayfs.bbclass`**  | systemd never runs OE's initscripts volatile hook               |
@@ -213,84 +210,140 @@ Verified upstream plumbing:
 ## 5. Target disk layout
 
 Partition table stays **MSDOS** (GPT has been reported to upset legacy Pi
-boot; Azure's `meta-raspberrypi-adu` warns about it). Consequence: **use ext4
-fs labels** (`/dev/disk/by-label/…`) rather than `by-partlabel`, which is a
-GPT-only artefact.
+boot). Use ext4 **fs labels** (`/dev/disk/by-label/…`); `by-partlabel` needs
+GPT. Squashfs slots are **fixed size ≥ payload** (1 KB short = failed install).
+Never OTA `bootcode.bin`/`start.elf`. Never keep a status DB on FAT.
 
-| #  | Size (draft) | FS       | Label/role            | Mounted                                 |
-| -- | ------------ | -------- | --------------------- | --------------------------------------- |
-| p1 | 100 MB       | vfat     | `boot`                | `/boot` (RO-ish, firmware's view)       |
-| p2 | ~350 MB      | squashfs | `rootfs-a`            | overlay `lowerdir` of `/`               |
-| p3 | ~350 MB      | squashfs | `rootfs-b`            | overlay `lowerdir` when B active        |
-| p4 | ~450 MB      | ext4     | `overlay`             | `/data/overlay` (`/etc` + `/var` upper) |
-| p5 | rest         | ext4     | `data`                | `/data` (app state)                     |
+Today's card (2026-09-18 image): p1 vfat ~130 MB + p2 ext4 **135 MB** on a
+122 GB disk — resize never ran. Any A/B layout must grow slots at flash time
+(wic sizes), not first-boot `resize2fs` of a squashfs.
 
-(32 GB card assumed; sizes are `[inferred]` starting points, not measured.
-Squashfs slots must be **fixed size ≥ payload** — a slot that is 1 KB too
-small is a failed install, so leave headroom and assert it in CI.)
+```
+             what start.elf can do (firmware 20250801)
+  tryboot.txt     YES  (1a: boot_delay Δ 5 s)
+  cmdline=        NO   (1b: file loaded, /proc/cmdline unchanged)
+  kernel=         NO   (1c: missing name still booted)
+  autoboot.txt    YES  parse + [tryboot] section (partition 1→9)
+                  landing on a *second FAT* still unproven
+```
 
-### Tier 1 — one FAT, per-slot cmdline (DEMOTED by `[bench]` 2026-09-24)
+### Comparison
 
-p1 holds `bootcode.bin`, `start.elf`, `config.txt`, `tryboot.txt`,
-`kernel*.img`, `*.dtb`, `overlays/`, and **`cmdline_a.txt` /
-`cmdline_b.txt`**, with per-slot stanzas in `config.txt`/`tryboot.txt`
-selecting `kernel=` + `cmdline=`. SWUpdate writes the *inactive* squashfs
-slot, then rewrites one FAT text file to switch. No repartitioning, no
-partition-table writes — the SD geometry never changes, which is exactly what
-you want when an OTA fails on a box that is unreachable on a roof.
+| | Classic Tier 1 | Tier 1-alt | Tier 2 | **Tier 3 U-Boot (plan of record)** |
+| -- | -- | -- | -- | -- |
+| Slot pick | `cmdline=` / `kernel=` in tryboot.txt | initramfs marker on `/data` | `autoboot.txt` `boot_partition=` | U-Boot `bootcmd` / `altbootcmd` |
+| Kernel vs modules | one kernel on p1 | same (§9 hazard) | per-FAT *if* landing works | **one kernel+modules per slot** |
+| Firmware coop | required — **dead on BCM2835** | none | parse proven; land unproven | `start.elf` only loads `u-boot.bin` |
+| FAT copies | 1 | 1 | 2 | 1 (GPU firmware + U-Boot only) |
+| Commit | rewrite tryboot.txt | write `/data/slot` | rewrite `autoboot.txt` | `fw_setenv` on `/data` |
 
-**Bench verdict: as drawn, dead.** `[bench]` test 1 (firmware 20250801):
-1a PASS — `tryboot.txt` replaces `config.txt` when armed (`boot_delay=5` Δ
-measured 11 s vs 6 s control); 1b **FAIL** — `cmdline=` in tryboot.txt is
-ignored (file demonstrably loaded, `/proc/cmdline` unchanged); 1c **FAIL** —
-`kernel=` with a missing file did not stop the boot. Per-slot cmdline/kernel
-selection on BCM2835 is off the table; what survives is **Tier 1-alt** (§8):
-small initramfs reads the slot marker and `switch_root`s by ext4 label —
-zero firmware cooperation beyond 1a's tryboot file-swap (which isn't even
-needed there).
+`start.elf` cannot load a kernel out of a rootfs. The only way a slot is a
+single understandable unit (kernel + modules + root together) is a **second
+stage that *can* read the slot filesystem**. That is U-Boot.
 
-### Tier 2 — `autoboot.txt` partition select (LIVE again — test 2 PASSED)
+### Recommended: per-slot kernel (U-Boot)
 
-`autoboot.txt` with `boot_partition=` + `tryboot_a_b=1`, roots as separate
-partitions, commit = rewrite `autoboot.txt`. Only if test 2 shows the legacy
-firmware honours it. Nicer semantics (firmware owns "which partition"), costs
-a second FAT-ish layout decision.
+One FAT that never changes after factory flash; two slot partitions that each
+hold a complete bootable Linux; `/data` for app state, overlay upper, and the
+U-Boot env (so `bootcount` is **not** a FAT write every boot).
 
-**Bench verdict 2026-09-24: the legacy start.elf parses `autoboot.txt` and
-honours `[all]`/`[tryboot] boot_partition=`** (evidence + method in §8 test 2
-and the bench sheet; DT channel is the `partition` u32, not `partnum`), and a
-bogus target self-heals via same-boot fallback. One proof-point remains before
-this can *lead*: that the boot actually lands on a second FAT partition whose
-`cmdline.txt` differs — the bench SD has only one FAT partition, so landing
-was never exercised, only parsing + selection. Needs a milestone card with
-p1+p1b (see §10).
+```
+ p1  ~64 MB    vfat        boot      bootcode.bin, start.elf, config.txt
+                                     kernel.img = u-boot.bin, boot.scr
+                                     slot-a/{zImage,dtb}  slot-b/{zImage,dtb}
+                                     NEVER OTA bootcode/start.elf/u-boot.bin
+ p2  ~350 MB   squashfs-xz rootfs-a  root + /lib/modules for kernel-a
+ p3  ~350 MB   squashfs-xz rootfs-b  same for B
+ p4  rest      ext4        data      /data — app, overlay upper, uboot.env
+```
 
-### Tier 3 — U-Boot + `bootcount`
+Boot:
 
-**Rejected, but buildable** (verified on the branch, not assumed). It would buy
-what §6.6 cannot: a real persistent env (`fw_env`), native
-`bootcount`/`altbootcmd`, `CONFIG_UBOOT=y` in SWUpdate, and — the genuinely
-interesting one — **per-slot kernel + modules**, which dissolves the §9
-coherence hazard for free. What wrynose actually does `[wrynose]`:
+```
+start.elf → u-boot.bin (as kernel.img)
+  → boot.scr reads env on /data
+  → load zImage+dtb from p1 slot-${slot}/  (fatload, not squashfs)
+  → bootz root=/dev/mmcblk0p{2|3} rootfstype=squashfs
+  → overlayfs-etc (CREATE_MOUNT_DIRS=0); solar-rs485 takes GPIO14/15
+```
+
+**p2/p3 are squashfs-xz.** That is the right root (RO, no journal, small).
+U-Boot on this board is not assumed to read xz squashfs, so it does **not**
+`load` the kernel out of p2/p3. The matching `zImage`+dtb for each slot live
+as files on p1 (`slot-a/`, `slot-b/`). Modules stay *inside* the squashfs, so
+kernel and modules still ship together in one `.swu`:
+
+1. write inactive squashfs (`installed-directly=true`)
+2. write that slot’s `zImage`+dtb on p1 (only those files, never `u-boot.bin`)
+3. `fw_setenv` to the new slot
+
+Interrupt before step 3 → still booting the old slot. Size squashfs slots **at
+wic time** (≥ payload + headroom); you cannot `resize2fs` them.
+
+SWUpdate writes the **inactive** slot (`installed-directly=true`), then
+`fw_setenv` to point at it and set `upgrade_available`. `bootcount` +
+`altbootcmd` is mainline (not a 2016 demo). Rollback = boot the other label.
+
+UART / MAX485 (hardware, not a U-Boot patch):
+
+- `ENABLE_UART=1` stays (meta-rpi `bbfatal` if U-Boot + UART=0 on this machine).
+- Split DE vs /RE: GPIO17/RTS → **DE** with pulldown; **/RE** pulled high at
+  reset. Boot: chip deaf+mute, GPIO14/15 is a clean console for U-Boot.
+- Production `boot.scr`: `bootdelay=-2` so bus noise never aborts autoboot.
+- After `bootz`, `solar-rs485` + `rs485ctl` enable the transceiver; getty off.
+
+Do **not** OTA `u-boot.bin` / `start.elf` / `bootcode.bin`. A U-Boot bump is a
+bench job, same class as GPU firmware.
+
+### Fallback: Tier 1-alt (initramfs, shared kernel on p1)
+
+Proven on the bench if we later refuse a second stage. Firmware always reads
+the same p1; userspace picks the squashfs. Kernel/modules coherence is a live
+§9 hazard — pin `SRCREV`. Not the plan of record.
+
+### Fallback: Tier 2 (two FAT)
+
+Only if we first prove *landing*: a card with two FAT partitions, distinct
+`cmdline.txt` (e.g. `slot=A` vs `slot=B`), `boot_partition=` flip, and
+`/proc/cmdline` actually changes. Until that test, do not build this wks.
+
+```
+ p1  ~100 MB  vfat      boot-a    GPU firmware + kernel_A + cmdline_A
+ p2  ~100 MB  vfat      boot-b    kernel_B + cmdline_B  (± copy of start.elf?)
+ p3  ~350 MB  squashfs  rootfs-a
+ p4  ~350 MB  squashfs  rootfs-b
+ p5  rest     ext4      data      /data as above
+```
+
+`autoboot.txt` on whichever FAT the firmware reads first:
+
+```
+[all]
+boot_partition=1
+
+[tryboot]
+boot_partition=2
+```
+
+Commit = rewrite `boot_partition` + fsync. Open question the landing test
+must answer: does p2 need its own `start.elf`, or is p1's GPU firmware
+enough? **Do not copy `bootcode.bin` onto p2 as an OTA path.**
+
+### U-Boot facts on wrynose (still true)
 
 | Fact                                                                                                              | Source                            |
 |-------------------------------------------------------------------------------------------------------------------|-----------------------------------|
 | `raspberrypi0-wifi.conf` sets `UBOOT_MACHINE ?= "rpi_0_w_defconfig"`                                              | machine conf                      |
 | u-boot is gated behind `RPI_USE_U_BOOT = "1"` (unset ⇒ firmware boots)                                            | `rpi-base.inc`                    |
 | enabled ⇒ `KERNEL_IMAGETYPE`→`uImage`, `u-boot.bin;${SDIMG_KERNELIMAGE}` and `boot.scr` join `IMAGE_BOOT_FILES`   | `rpi-base.inc`                    |
-| upstream still ships `configs/rpi_0_w_defconfig`                                                                  | `U-Boot/u-boot` master            |
 | `RPI_USE_U_BOOT=1` + `ENABLE_UART=0` is a **hard `bbfatal`**; otherwise it force-appends `enable_uart=1`          | `rpi-config_git.bb:191-200`       |
+| stock `rpi-u-boot-scr` `boot.cmd.in` has no A/B / bootcount; bootargs from DTB `/chosen`                          | meta-rpi                          |
 
-That last row is the objection that ends the argument, and it is now an
-upstream guard rather than my inference: booting u-boot on this machine pins
-the console via `enable_uart=1`, i.e. the UART on GPIO14/15 — the same pair
-`solar-rs485` claims (§Kernel / device-tree in `.rules`), and u-boot additionally
-wants an interruptible console. The stock `rpi-u-boot-scr` `boot.cmd.in` has
-**no A/B and no bootcount** and even takes `bootargs` from the DTB `/chosen`,
-so the per-slot boot script is ours to write either way. Net cost: a second
-boot stage that can brick, a UART fight, and a new non-A/B artifact
-(`u-boot.bin` shipped as `kernel.img`). Still **rejected** — §6.7 has the demo
-comparison and the two conditions that would reopen this.
+Keep `ENABLE_UART=1` (already on this image). Console on 14/15 during U-Boot is
+**wanted** for the bench; MAX485 isolation (DE pulldown, /RE pull-up) plus
+`bootdelay=-2` is what keeps the inverter bus from aborting autoboot. The
+per-slot `boot.cmd` is ours. Never OTA `u-boot.bin`. §6.7 has the 2016-demo
+comparison (mainline already has `bootcount`/`altbootcmd`).
 
 ---
 
@@ -616,22 +669,15 @@ script is much shorter than that repo suggests. It is still only evidence that
 the per-slot-kernel layout works — which `[bench]` test 1c (`kernel=` stanzas
 per slot) is designed to give us **without** a second bootloader.
 
-The objection to Tier 3 is therefore **not** missing functionality; it is the
-BCM2835 boot chain (a second stage that can brick, `u-boot.bin` shipped as
-`kernel.img`) and the forced console on GPIO14/15 (§5 Tier 3).
+The remaining cost of U-Boot is a second stage (`u-boot.bin` as `kernel.img`)
+that we **never OTA**. The GPIO14/15 “fight” is not a pin mux law: keep
+`ENABLE_UART=1`, isolate MAX485 DE/RE at reset, `bootdelay=-2` in production.
+Kernel overlay `solar-rs485` takes the pins after `bootz`.
 
-**Decision: stay Tier 1/1-alt.** Reopen Tier 3 only if **both** hold: (a) test
-1c shows `kernel=` is not honoured per boot on BCM2835, so a slot-coherent
-kernel is impossible without a bootloader; **and** (b) we give up `solar-rs485`
-on GPIO14/15 (or re-home RS485 to USB-serial / bit-banged UART). Until then
-u-boot buys a brick risk and a UART argument.
-
-> **`[bench]` 2026-09-24:** condition (a) is now **true** (1c: `kernel=` not
-> honoured). (b) remains false, so **Tier 3 stays closed** — but the per-slot-
-> kernel gap is now real: kernel/modules coherence moves to §9 as a live
-> hazard, mitigated by pinning the kernel and per-slot `/lib/modules` discipline
-> (or by bench test 1c's alternative, per-slot kernel+modules on the
-> initramfs/Tier 2 route).
+**Decision (2026-09-24, after bench 1c + MAX485 isolation):** plan of record
+is **per-slot kernel via U-Boot** (§5). Condition (a) is true (`kernel=` not
+honoured). Condition (b) was the wrong question — we do not give up RS485; we
+keep the transceiver quiet until Linux.
 
 ---
 
@@ -841,10 +887,11 @@ hence whether the update path needs `panic=N`/watchdog cover and whether
 `installed-directly=true` streaming keeps up. **Flips:** nothing structural —
 too slow means a bigger block size / smaller root, not a new design.
 
-### Test 5 — RO root + `/etc` overlay (needs §10 step 3 built)
+### Test 5 — RO root + `/etc` overlay (needs §10 step 4 built)
 
-> **Not run** — needs the §10 step-3 image, including a first-boot resize
-> (today's root is 135 MB on a 122 GB card).
+> **Not run** — needs the §10 step-4 A/B image (p2/p3 squashfs slots +
+> `overlayfs-etc` + `/data`). Sizing is done at wic time, so there is no
+> first-boot resize.
 
 **Purpose:** prove squashfs + `overlayfs-etc` + `/data` boot on this board at
 all, before any of it is load-bearing. **Do:** flash the milestone image, run
@@ -964,13 +1011,17 @@ Then update §5 (which tier is the plan of record), this matrix, and `.rules`.
    `UBOOT`/`MTD`/`SURICATTA` off, as intended. `[ci]` The `wic-native -c fetch`
    check from §2.1 also **PASSED 2026-09-24** `[bench]` — nothing left open in
    step 1.
-2. Bench tests 0–5 on the *current* layout/probe, per the protocol in §8;
-   record results there.
-3. Read-only root + `overlayfs-etc` + `/var` overlay + `/data` on the
-   **existing** two-partition layout (as far as it goes) → milestone: an
-   image that boots RO with writable `/etc`.
-4. New kickstart `fw/files/wic/solar-ctl-ab.wks.in` (squashfs slots via
-   `--source rawcopy`, per-slot `cmdline_*.txt` + `kernel_*.img` in
-   `IMAGE_BOOT_FILES`).
-5. SWUpdate end-to-end **A→B→A** cycle on the bench, with the tryboot script.
+2. Bench tests 0–4 **DONE** 2026-09-24 (`fw/docs/bench-2026-09-24.md`). Classic
+   Tier 1 is dead (`cmdline=`/`kernel=` ignored). Plan of record is **U-Boot +
+   per-slot kernel** (§5).
+3. Next *image* (still one FAT + one ext4 root — no A/B yet): WiFi firmware
+   (already in the recipe), grow root at wic time, then a **U-Boot smoke image**
+   (`RPI_USE_U_BOOT=1`, `bootdelay=-2`, `ENABLE_UART=1`, overlay still off).
+   Confirm U-Boot loads Linux and serial is usable. Do not A/B until that boots.
+4. A/B kickstart `fw/files/wic/solar-ctl-ab.wks.in`: p1 vfat (GPU + `u-boot.bin`
+   + `slot-a/`/`slot-b/` kernels) + p2/p3 **squashfs-xz** `rootfs-a`/`rootfs-b`
+   + p4 ext4 `/data`. Custom `boot.cmd` with `bootcount`/`altbootcmd`.
+   `overlayfs-etc` with `CREATE_MOUNT_DIRS="0"`.
+5. SWUpdate in the image (`CONFIG_UBOOT=y`); bench A→B→A. Env on `/data`, never
+   the RAM `BOOTLOADER_NONE` dict. `installed-directly=true`. Never OTA p1.
 6. Web UI **after** signing is switched on; Hawkbit (`SURICATTA`) last.

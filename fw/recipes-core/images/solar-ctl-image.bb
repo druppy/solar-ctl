@@ -26,14 +26,16 @@ IMAGE_FEATURES += "allow-root-login empty-root-password serial-autologin-root"
 
 # meta-raspberrypi adds 'kernel-modules' (= literally every kernel module,
 # ~1800 packages) to MACHINE_EXTRA_RRECOMMENDS for every rpi machine, and
-# BT firmware we don't use (no bluetooth distro feature). Drop both and
-# install only what the Zero W actually needs; modules required to boot come
-# from the kernel defconfig (built-in), and WiFi needs just brcmfmac +
-# firmware (the bcm43430 firmware blobs come via the machine conf).
+# BT firmware we don't use (no bluetooth distro feature). Drop both.
+# Do NOT rely on MACHINE_EXTRA_RRECOMMENDS for WiFi firmware: the 2026-09-18
+# image had linux-firmware-rpidistro-bcm43430 in that list and still omitted
+# the package — install it explicitly. LICENSE_FLAGS_ACCEPTED is already set
+# in kas-rpi0.yml.
 MACHINE_EXTRA_RRECOMMENDS:remove = "kernel-modules bluez-firmware-rpidistro-bcm43430a1-hcd"
 
 IMAGE_INSTALL:append = " \
     kernel-module-brcmfmac \
+    linux-firmware-rpidistro-bcm43430 \
     wireless-regdb \
     wpa-supplicant \
     solar-wifi \

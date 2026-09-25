@@ -350,7 +350,8 @@ scp fw/tools/ota-probe.sh root@<board>:/tmp/ && ssh root@<board> sh /tmp/ota-pro
   glibc-only bits, expect to patch or drop it.
 - **Kernel modules**: meta-raspberrypi pulls *all* ~1800 modules into every
   rpi image; our image recipe removes that and installs only the `brcmfmac`
-  WiFi stack (BCM43430 firmware comes from the machine conf). Add specific
+  stack plus `linux-firmware-rpidistro-bcm43430` (do not rely on the machine
+  conf RRECOMMENDS — the 2026-09-18 image omitted the firmware). Add specific
   `kernel-module-*` packages to `solar-ctl-image.bb` as needed.
 - **bitbake** has no `wrynose` branch; we pin `2.18`, enforced by oe-core's
   sanity checker.
