@@ -322,6 +322,22 @@
   survives power pull). Test 4 ≈10/21 MB/s. Bugs: no WiFi firmware in image;
   root never resized (135 MB on 122 GB). Serial: CH341 `/dev/ttyUSB0` (FT232R
   dead). Do not OTA `bootcode.bin`/`start.elf`.
+- **Bench test 5 PASS (2026-09-25, milestone image `20260925194720`):** U-Boot +
+  per-slot kernel A/B layout validated end-to-end — squashfs root on p2, `/etc`
+  overlay upper on `/data` (edit survives reboot AND slot switch = §9 hazard
+  confirmed), A→B→A flip via `mount -o remount,rw /boot; fw_setenv slot b|a;
+  mount -o remount,ro /boot; reboot` (cmdline shows p3/p2 accordingly). Two
+  gotchas: (1) **root on squashfs needs `CONFIG_SQUASHFS=y`** —
+  bcmrpi_defconfig has `=m` and with no initramfs the kernel panics `VFS:
+  Unable to mount root fs on unknown-block(179,2)`; fixed in
+  `solar-ctl-slim.cfg` (the `kernel-module-squashfs` package then ceases to
+  exist — don't `IMAGE_INSTALL` it); `overlay.ko` staying `=m` is fine (loaded
+  from the mounted root). (2) **libubootenv cannot create `/boot/uboot.env`**
+  ("Cannot initialize environment") — it must pre-exist at exactly
+  `CONFIG_ENV_SIZE` (16 KiB): seed once with `dd` zeros + `fw_setenv -s
+  defenv.txt`; step 5 should ship the blob via `IMAGE_BOOT_FILES`. systemd
+  self-overlays `/var/{cache,lib,spool}` on tmpfs — works on a RO root, no
+  `overlayfs.bbclass` needed.
 
 ## Editor on target
 - Use **busybox `vi`** — decided 2026-09 after evaluating classic nvi 1.81.6:

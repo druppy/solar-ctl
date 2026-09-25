@@ -1,0 +1,26 @@
+# solar-ctl A/B layout (doc swupdate-ota.md §5, §10 step 4).
+#
+#  p1 vfat    GPU firmware + u-boot.bin (deployed as kernel.img) + boot.scr
+#             + uImage (top-level fallback) + slot-a/ per-slot kernel. p1
+#             only ever GROWS (slot-b/ appears with the first install); the
+#             update path never rewrites bootcode/start.elf/u-boot.bin.
+#  p2/p3      squashfs-xz root slots, FIXED size: the payload must fit or
+#             the wic build fails (there is no resize at flash time).
+#  p4 ext4    /data: mounted by the overlayfs-etc preinit, hosts the /etc
+#             overlay upper and app state. Deliberately given no mountpoint
+#             in the wks -> no fstab line, so systemd never owns the mount.
+#             NB: NO --source here - "--source empty" leaves the partition
+#             UNFORMATTED (all zeros); no source at all is what makes wic
+#             run mkfs.ext4 on it.
+#
+# --size/--fixed-size are in MiB. Slots: ~350 MiB as in the design doc.
+# p4 is sized for the 122 GB bench card (any slack stays unpartitioned at
+# the end of the card; a smaller card fails the wic build with a clear
+# error - adjust --fixed-size if the card changes).
+
+part /boot --source bootimg-partition --ondisk mmcblk0 --fstype=vfat --label boot --active --align 4096 --size 100 --fsoptions "defaults,ro"
+# (squashfs has no label concept - wic refuses --label here; the slots are
+#  addressed as /dev/mmcblk0p{2,3}, per doc §4's device-node root= decision)
+part slot-a --source rootfs --ondisk mmcblk0 --fstype=squashfs --align 4096 --fixed-size 350 --mkfs-extraopts "-comp xz"
+part slot-b --source rootfs --ondisk mmcblk0 --fstype=squashfs --align 4096 --fixed-size 350 --mkfs-extraopts "-comp xz"
+part none --ondisk mmcblk0 --fstype=ext4 --label data --align 4096 --fixed-size 119000

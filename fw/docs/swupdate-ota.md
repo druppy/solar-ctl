@@ -724,9 +724,9 @@ Two properties make this safe, and both shape the protocol:
 assume `/boot`). Record every run in `fw/docs/bench-<date>.md` and paste the
 decision into the matrix at the end.
 
-> **Status 2026-09-24 (retested same day):** 1a PASS / 1b FAIL / 1c FAIL /
-> 2 PASS / 3 PASS / 4 PASS. Sheet: `fw/docs/bench-2026-09-24.md`. Test 5 waits
-> on the §10 step-3 image.
+> **Status 2026-09-25:** 1a PASS / 1b FAIL / 1c FAIL / 2 PASS / 3 PASS / 4 PASS /
+> **5 PASS** (A/B boot chain + `fw_setenv` slot flip validated end-to-end on
+> milestone image `20260925194720`). Sheet: `fw/docs/bench-2026-09-24.md`.
 
 ### Arming tryboot
 
@@ -898,9 +898,16 @@ too slow means a bigger block size / smaller root, not a new design.
 
 ### Test 5 — RO root + `/etc` overlay (needs §10 step 4 built)
 
-> **Not run** — needs the §10 step-4 A/B image (p2/p3 squashfs slots +
-> `overlayfs-etc` + `/data`). Sizing is done at wic time, so there is no
-> first-boot resize.
+> **PASS (2026-09-25, image `20260925194720`)** — see the sheet's test-5 row for
+> evidence. Two gotchas found and handled: squashfs had to move `m`→`y` (no
+> initramfs to load it at mount-root time — first boot panicked
+> `unknown-block(179,2)`), and libubootenv refuses to create `/boot/uboot.env`
+> from nothing (seed a 16 KiB blob once; ship it via `IMAGE_BOOT_FILES` in
+> step 5). `/var` needed no work: systemd's own tmpfs overlays for
+> `cache`/`lib`/`spool` suffice on a RO root. The `fw_setenv slot` flip replaced
+> the planned hand-`dd`: flipping = one FAT env write + reboot, and slot B was
+> booted without touching p3 (identical content; selection is what is under
+> test, kernel came from the p1 fallback).
 
 **Purpose:** prove squashfs + `overlayfs-etc` + `/data` boot on this board at
 all, before any of it is load-bearing. **Do:** flash the milestone image, run
@@ -931,12 +938,18 @@ switch (it should — that is the hazard in §9); hand-flip timings.
 | 3 marker survives a power pull            | commit = write + verify + fsync, p1 ro by default                 |  ✅†   |
 | 3 marker lost                             | p1 writes need a second copy of every file it depends on          |        |
 | 4 ≥ 5 MB/s write                          | ~350 MB slot in ~70 s: fine, no design change                     |   ✅   |
+| 5 squashfs root + `/etc` overlay + flip   | U-Boot + per-slot kernel layout validated end-to-end              |  ✅‡   |
 
 \* Fired via the `partition` property, not `partnum`, and 2b **self-healed in
 the same boot instead of failing** — parsing + section-select + fallback all
 work. Not yet shown: booting *lands* on a second FAT partition
 (`boot_partition=2` with its own `cmdline.txt`). Tier 2 is live but not yet
 plan-of-record; Tier 1-alt is the only fully-proven route today.
+
+‡ Test 5 (2026-09-25): boot, `/etc` persistence across reboot, and A→B→A via
+`fw_setenv slot` all pass. The "Tier 1-alt is the only proven route" note above
+is superseded: **U-Boot + per-slot kernel is now proven too** and remains the
+plan of record.
 
 † Survived, but today p1 is rw-by-default; "ro by default" is a step-3
 milestone-image property, to be re-confirmed there.
