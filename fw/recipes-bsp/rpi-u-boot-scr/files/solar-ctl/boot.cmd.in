@@ -1,0 +1,34 @@
+# solar-ctl A/B boot script - REPLACES the stock rpi-u-boot-scr boot.cmd.in
+# (picked up first via FILESEXTRAPATHS in rpi-u-boot-scr.bbappend).
+# Doc: swupdate-ota.md §5 (per-slot kernel), §10 step 4.
+#
+# Slot pick: U-Boot env var "slot" (a|b), default a, validated in-script.
+# The env persists in /boot/uboot.env (FAT file - CONFIG_ENV_FAT_FILE in
+# rpi_0_w_defconfig, proven by the smoke bench). This script NEVER calls
+# saveenv, so there is no FAT write per boot; a slot switch is an explicit
+# `fw_setenv slot <a|b>` from the target (remount /boot rw first), one FAT
+# write per switch.
+#
+# root= is appended HERE because the firmware cmdline carries none
+# (CMDLINE_ROOTFS="" in kas-rpi0.yml). The per-board tokens the firmware
+# adds (vc_mem.*, smsc95xx.macaddr, ...) arrive in /chosen/bootargs and are
+# kept verbatim.
+fdt addr ${fdt_addr} && fdt get value bootargs /chosen bootargs
+if test -z "${slot}"; then setenv slot a; fi;
+if test "${slot}" != "a"; then if test "${slot}" != "b"; then setenv slot a; fi; fi;
+if test "${slot}" = "a"; then setenv slot_part 2; else setenv slot_part 3; fi;
+setenv bootargs "${bootargs} root=/dev/mmcblk0p${slot_part} rootfstype=squashfs rootwait"
+# Per-slot kernel on p1; fall back to the top-level uImage (kickstart state
+# and an empty slot-b both run the same kernel/rootfs pair at milestone
+# stage - SWUpdate writes slot-b/ before ever switching to it).
+if fatload @@BOOT_MEDIA@@ 0:1 ${kernel_addr_r} slot-${slot}/@@KERNEL_IMAGETYPE@@; then
+    @@KERNEL_BOOTCMD@@ ${kernel_addr_r} - ${fdt_addr}
+else
+    echo "solar-ctl: slot-${slot}/@@KERNEL_IMAGETYPE@@ missing, using top-level"
+    if fatload @@BOOT_MEDIA@@ 0:1 ${kernel_addr_r} @@KERNEL_IMAGETYPE@@; then
+        @@KERNEL_BOOTCMD@@ ${kernel_addr_r} - ${fdt_addr}
+    else
+        echo "solar-ctl: no kernel on @@BOOT_MEDIA@@ 0:1 - halting"
+        halt
+    fi
+fi

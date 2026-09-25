@@ -63,6 +63,17 @@
   `${UNPACKDIR}/<file>` paths for `file://` SRC_URI files.
 - A line whose first char is `}` inside a recipe shell/python function breaks
   bitbake's parser (e.g. a `network={...}` heredoc). Use template files + sed.
+- **A dangling `.bbappend` is a hard ERROR on wrynose, not a warning**: any
+  `*.bbappend` in an *active* layer must match a recipe that is also visible.
+  Adding `swupdate_%.bbappend` to `fw/` killed the image build (PR #1) with
+  `ERROR: No recipes in default available for: .../swupdate_%.bbappend`, even
+  though nothing in the image references swupdate. Every layer is parsed by
+  every build. Fix = put such recipes in a layer that only the kas config
+  needing them adds (`fw-swupdate/`), not in `fw/`.
+- In kas, `repos.<id>.layers` is a **mapping** (layer path -> null | disabled
+  | {prio}), so an including config that adds a key ADDS a layer while the rest
+  of the parent entry survives; `target:` on the other hand is a list and gets
+  REPLACED wholesale.
 - `serial-console` is **not** a valid IMAGE_FEATURE on wrynose (it silently
   skips the image recipe). With systemd the serial getty comes automatically
   from `ENABLE_UART=1` + `SERIAL_CONSOLES` (systemd-serialgetty).
@@ -141,6 +152,193 @@
 - `build/tmp/work-shared/raspberrypi0-wifi/kernel-source` survives rm_work
   — grep defconfigs/board DTS/overlays there instead of unpacking anything.
 
+## A/B OTA / SWUpdate (in design — full record in fw/docs/swupdate-ota.md)
+- Target: A/B **squashfs-xz** read-only roots + `/etc` overlay + ext4 `/data`;
+  slot switch by **RPi firmware** (no U-Boot). Design only, nothing in an image.
+- **Compile gate exists** (2026-09-23): `fw/kas-swupdate.yml` (`includes:
+  fw/kas-rpi0.yml`, `target: [swupdate]`) + the **`fw-swupdate` layer**
+  (bbappend + kconfig fragment) + a **parallel `swupdate` CI job** that builds
+  only the recipe — musl was the open question, so the image build in
+  `fw/kas-rpi0.yml` is deliberately untouched and `swupdate` is NOT in
+  `IMAGE_INSTALL`. That job restores the sstate cache but must **never save it**
+  (10 GB/repo quota; the image job already spends ~1.3 GB per generation), and
+  it asserts the merged kconfig. That config is snapshotted by our bbappend to
+  `${T}/swupdate-merged-dotconfig` (`rm_work` never deletes `temp`); note
+  `${WORKDIR}/.config` is only the *input* merge and still shows the symbols the
+  fragment removed, so it is not evidence of anything.
+- **The gate PASSED** (2026-09-23, run 35926622985): `swupdate_2026.05.1.bb`
+  builds on **musl** — DEPENDS came from oe-core (`lua_5.5.0`,
+  `libconfig_1.8.2`, `json-c_0.18`, `libubootenv_0.3.7`) — and the merged config
+  kept `SIGNED_IMAGES`/`HASH_VERIFY`/`BOOTLOADER_NONE`/`SYSTEMD` = y with
+  `UBOOT`/`MTD`/`SURICATTA` off. The toolchain is no longer the unknown; the
+  bench tests are.
+- The bbappend lives in its **own layer** `fw-swupdate/`, added only by
+  `fw/kas-swupdate.yml` — see the dangling-bbappend gotcha above. Move it back
+  into `fw/` when SWUpdate actually enters the image.
+- **SWUpdate update state is a trap with `BOOTLOADER_NONE`**: the "Update Status
+  Storage" choice has exactly ONE option (`UPDATE_STATE_CHOICE_BOOTLOADER`,
+  which `depends on ... || BOOTLOADER_NONE || ...`), so it is force-enabled and
+  there is no file-based option to pick. `bootloader/none.c` implements the env
+  on a `static struct dict` = **RAM only, returns success, gone at reboot**. So
+  `ustate`/`swupdate-env`/`bootstate=`/`set_bootloader_state` silently persist
+  nothing → keep all boot-state bookkeeping in `/data` yourself.
+  **Escape hatch (verified in swupdate 2026.05.1 sources, no C needed):**
+  `CONFIG_BOOTLOADER_GRUB=y` is a *file-backed* env and `GRUBENV_PATH` is a
+  **Kconfig string**, not hardcoded — point it at ext4 `/data` and those calls
+  really persist. Costs: the file must be **exactly 1024 bytes** with the
+  `# GRUB Environment Block\n` header (pre-create it; writes go via
+  `grubenv.new`+rename, so same-fs only), and it reports "grub" on a board with
+  no GRUB. **Trap:** the `choice "Default Bootloader Interface"` has no `default`
+  statement, so making GRUB *visible* silently flips the default off `none`
+  (GRUB precedes NONE in the choice) — pin `BOOTLOADER_DEFAULT_NONE` explicitly.
+- `overlayfs-etc.bbclass` (oe-core) is the `/etc` mechanism, BUT its default
+  `OVERLAYFS_ETC_CREATE_MOUNT_DIRS=1` does `mount -o remount,rw /` — on a
+  squashfs root that can never work. Set it to `0` and pre-create `/data`.
+  Also conflicts with IMAGE_FEATURES `package-management`.
+- `overlayfs.bbclass` (for `/var`) requires the **`overlayfs` DISTRO_FEATURE,
+  which is NOT in `DISTRO_FEATURES_DEFAULTS`** in fw/conf/distro/solar-ctl.conf
+  — must be added. The kernel side is already there: `CONFIG_OVERLAY_FS=m`,
+  `CONFIG_SQUASHFS=m` (+`SQUASHFS_XZ=y`) in `bcmrpi_defconfig` (verified
+  2026-09-24 in work-shared, kernel 6.18.33) — the image merely lacks the
+  `kernel-module-overlay`/`kernel-module-squashfs` **packages**, not the
+  symbols. It refuses `/etc` by design.
+  `/var/volatile` for RO rootfs is initscripts-only → systemd never runs it.
+- Slot switching: `tryboot` is the mechanism — firmware sets a one-shot flag,
+  clears it, and loads `tryboot.txt` **instead of** `config.txt`. Kernel side
+  verified (`drivers/firmware/raspberrypi.c` parses `reboot="0 tryboot"` →
+  `RPI_FIRMWARE_SET_REBOOT_FLAGS`, binds on bcm2835-firmware). Arm with
+  `echo '0 tryboot' > /run/systemd/reboot-param && systemctl reboot` (systemd>=254).
+  `autoboot.txt`/`tryboot_a_b` exists but legacy start.elf support is untested.
+  Nothing decrements a boot counter (tryboot is consumed pre-kernel) → rely on
+  `panic=N` + per-slot `slot=A|B` cmdline token, not a bootcount.
+- meta-swupdate has a `wrynose` branch; layer is at the **repo root** (kas entry
+  needs no `layers:` key), `LAYERDEPENDS_swupdate = "openembedded-layer"` (we
+  carry meta-oe). Recipes: `swupdate.inc` + `swupdate_2025.12/2026.05.1/git.bb`
+  sharing one `swupdate/defconfig`; default provider = 2026.05.1. Configured by
+  **its own Kconfig**, no PACKAGECONFIG: `swupdate.inc` inherits `cml1`, so
+  **any `*.cfg` in SRC_URI is a config fragment** — do_configure concatenates
+  flags + `defconfig` + `find_cfgs()` (every SRC_URI `*.cfg`) then
+  `merge_config.sh -m` (last wins) + `olddefconfig`. Ours:
+  `fw-swupdate/recipes-support/swupdate/swupdate/solar-ctl.cfg`.
+  DEPENDS are computed from the **merged** config text, and the fragment regex
+  accepts `# CONFIG_FOO is not set`, so that form really removes a base `y` and
+  its DEPENDS. Trap: `HAVE_*` are `option env=` symbols probed from the sysroot
+  by SWUpdate's own Makefile, so **olddefconfig silently drops** any symbol with
+  an unmet `depends on HAVE_*` — never trust "the fragment was applied", read
+  the merged `.config` (CI dumps it). `CURL`/`CURL_SSL` are **hidden** (only via
+  `SURICATTA`/`DOWNLOAD*`). `libubootenv`/`libconfig`/`json-c` are unconditional
+  DEPENDS. Shipped defconfig is wrong for us: `CONFIG_UBOOT=y` (we have no
+  U-Boot), `SURICATTA`/`CURL`/`SIGNED_IMAGES`/`HASH_VERIFY` all off. Hawkbit =
+  just `CONFIG_SURICATTA=y` (+CURL_SSL) — a config, not a protocol to implement.
+  No RPi bootloader handler exists (`none/ebg/uboot/grub/cboot` only; and
+  `BOOTLOADER_NONE` is `default y`) → set
+  `bootloader_transaction_marker=false; bootloader_state_marker=false;` and
+  switch slots ourselves; no `dual_copy` property — standby slot is our job.
+  `installed-directly=true` is **mandatory on 512 MB** (else it extracts to
+  tmpfs /tmp). `swupdate-www/-client/-ipc/-lua/-progress/-tools/-usb` are
+  packages of `swupdate`. The layer also ships **bbclasses** —
+  `swupdate-image.bbclass` (`.swu` straight from an image recipe +
+  `file://sw-description`) on `swupdate-common.bbclass` (`do_swuimage`,
+  `SWUPDATE_IMAGES*`, `SWUPDATE_SIGNING` ⇒ `cpio-native`/`openssl-native`) — the
+  likely route for building the actual artifacts (signing at build time).
+- **`wic` moved OUT of oe-core** (verified 2026-09-23: no `scripts/lib/wic`
+  on wrynose or master). It is a standalone project consumed as a recipe:
+  `meta/recipes-support/wic/wic_0.3.1.bb` → `git://git.yoctoproject.org/wic.git`
+  tag v0.3.1, built as `wic-native`. Consequences: canned wks now live in
+  **`<layer>/files/wic/`** (so ours goes in `fw/files/wic/`); `image_types_wic`
+  gained an `IMAGER=direct` abstraction; plugin source (rawcopy) is only
+  greppable locally in `build/downloads/git2/git.yoctoproject.org.wic.git`
+  (real path **`src/wic/plugins/source/rawcopy.py`**, not `lib/wic/…`).
+  `bitbake wic-native -c fetch` **PASSED 2026-09-24** — smart-HTTPS git works
+  even though Cloudflare still 403s the cgit **web** UI; if it ever fails to
+  fetch, mirror wic.git to GitHub and override SRC_URI in a bbappend.
+- Hazards: `/etc` overlay upper is **shared by both slots and survives
+  rollback** (factory reset = wipe the upper dir; app config belongs in
+  `/data`); **never OTA `bootcode.bin`/`start.elf`** (corrupt GPU firmware =
+  truck roll); keep p1 FAT writes rare; MSDOS table + ext4 **fs labels**
+  (`/dev/disk/by-label/`), since `by-partlabel` needs GPT.
+- Bootloader version check: `bitbake -e rpi-bootfiles | grep -E
+  '^(PV|SRCREV|RPIFW_DATE)='` (PV=`${RPIFW_DATE}`), or the
+  `rpi-bootfiles-<PV>.stamp` in the deploy dir; `vcgencmd version` needs
+  libraspberrypi-bin (not installed). Bench probe: `fw/tools/ota-probe.sh`.
+- **No runtime firmware updater exists in this stack** (verified 2026-09-24
+  against meta-raspberrypi `wrynose`): there is **no `rpi-update` recipe** (no
+  matching path, and a layer-scoped code search returns zero hits — the tool
+  lives upstream in `Hexxeh/rpi-update`, unpackaged). Boot files come from
+  `rpi-bootfiles`, which pins `raspberrypi/firmware` to a SRCREV
+  (`RPIFW_DATE ?= "20250801"`) and deploys them at build time; `rpi-eeprom`
+  exists but its COMPATIBLE_MACHINE is only raspberrypi4, raspberrypi4-64 and
+  raspberrypi5 (a Zero W has no EEPROM). Consequence for A/B: a firmware fix is a
+  `rpi-bootfiles` bump + rebuild + **supervised p1 maintenance op on the bench**,
+  never an OTA path — p1 is shared by both slots, so no slot switch can carry a
+  firmware change, and rewriting `start.elf`/`bootcode.bin` in place is the one
+  brick-capable action here (doc §9).
+- **An RPi bootloader backend for SWUpdate is feasible but deferred** (doc §6.6):
+  `doc/source/bootloader_interface.rst` documents the extension point (4 patch
+  points: `bootloader/rpi.c` + a `BOOTLOADER_*` define in `include/bootloader.h`
+  + Kconfig entry and a `BOOTLOADER_DEFAULT_*` choice entry + one `obj-` line);
+  backends are keyed by **string**, not enum, and `core/bootloader.c` skips
+  entries whose `funcs` is NULL. Why not worth it: the interface is a key/value
+  env and **the Pi has no such thing** (boot choice = which file the firmware
+  reads + a one-shot flag), `env_get` cannot read tryboot back (no getter, only
+  `SET_REBOOT_FLAGS`), and per-variable `env_set` means FAT writes on p1. Note
+  `bootloader_interface.rst`'s supported list is **stale** (omits `cboot`).
+  Revisit trigger: stage-3 `SURICATTA`/Hawkbit boot-state reporting.
+- **GRUB is an env store, not a bootloader here** (doc §6.6): `start.elf` on
+  BCM2835 cannot load GRUB and `BOOTLOADER_GRUB` does NOT switch slots — it only
+  backs the key/value env with a file so the state calls persist. Plan of record
+  stays `BOOTLOADER_NONE` + bookkeeping in `/data`.
+- **U-Boot is the plan of record for per-slot kernels** (doc §5): wrynose
+  `RPI_USE_U_BOOT=1` deploys `u-boot.bin` as `kernel.img` (`rpi_0_w_defconfig`).
+  `RPI_USE_U_BOOT=1` + `ENABLE_UART=0` is a hard `bbfatal`; we **keep**
+  `ENABLE_UART=1` (already on). UART vs RS485 is hardware: split MAX485 DE
+  (GPIO17, pulldown) from /RE (pull-up) so the chip is deaf+mute until Linux;
+  production `boot.scr` uses `bootdelay=-2`. Never OTA `u-boot.bin`/`start.elf`.
+  Stock `rpi-u-boot-scr` has no A/B — we write `boot.cmd`. Env + `bootcount` live
+  on ext4 `/data`, not FAT. Layout: p1 vfat (GPU+U-Boot + `slot-a/`/`slot-b/`
+  kernels) + p2/p3 squashfs-xz roots + p4 `/data`. Smoke-verified 2026-09-25:
+  U-Boot 2026.01 (musl) boots Linux via the stock `boot.scr` — `bootcmd=
+  bootflow scan`, `bootdelay=2`, prompt `U-Boot>`, banner→kernel ~6 s; an
+  input byte inside the 2 s window interrupts autoboot (board waits at the
+  prompt, not bricked).
+- **Bench protocol is doc §8** (tests 0–5, each with commands + what decision it
+  flips + a re-evaluation matrix), not a 4-row table any more. Key property:
+  `tryboot` is consumed pre-kernel, so a wrong answer **reboots back to
+  `config.txt` by itself** — nothing can brick the board, and nothing can be
+  verified *before* the reboot (evidence = `/proc/cmdline` + serial log after).
+  Fallback if `start.elf` won't vary the cmdline per boot is **not** rewriting
+  `cmdline.txt` (every boot needs it → corrupt = truck roll) but a small
+  **initramfs** that picks the slot from a marker on `/data` and `switch_root`s
+  by ext4 label. `ota-probe.sh` is strictly read-only, busybox-ash safe
+  (validated with `busybox sh` + `busybox awk`), and takes `OTA_PROBE_BOOT=<dir>`
+  to inspect a card in a bench reader.
+- **Bench 2026-09-24 (retested same day; `fw/docs/bench-2026-09-24.md`, firmware
+  20250801):** 1a PASS (11 s vs 6 s), 1b FAIL (`cmdline=` ignored), 1c FAIL
+  (`kernel=` ignored) → classic Tier 1 dead. Test 2 PASS: `autoboot.txt` is
+  parsed; channel is `/chosen/bootloader/partition` (1 unarmed → 9 armed),
+  not `partnum`. Bogus p9 self-heals same boot. Tier 2 live but landing on a
+  second FAT unproven. Plan of record after 1c + MAX485 isolation: **U-Boot +
+  per-slot kernel** (Tier 1-alt remains the no-second-stage fallback). Test 3 PASS (FAT marker
+  survives power pull). Test 4 ≈10/21 MB/s. Bugs: no WiFi firmware in image;
+  root never resized (135 MB on 122 GB). Serial: CH341 `/dev/ttyUSB0` (FT232R
+  dead). Do not OTA `bootcode.bin`/`start.elf`.
+- **Bench test 5 PASS (2026-09-25, milestone image `20260925194720`):** U-Boot +
+  per-slot kernel A/B layout validated end-to-end — squashfs root on p2, `/etc`
+  overlay upper on `/data` (edit survives reboot AND slot switch = §9 hazard
+  confirmed), A→B→A flip via `mount -o remount,rw /boot; fw_setenv slot b|a;
+  mount -o remount,ro /boot; reboot` (cmdline shows p3/p2 accordingly). Two
+  gotchas: (1) **root on squashfs needs `CONFIG_SQUASHFS=y`** —
+  bcmrpi_defconfig has `=m` and with no initramfs the kernel panics `VFS:
+  Unable to mount root fs on unknown-block(179,2)`; fixed in
+  `solar-ctl-slim.cfg` (the `kernel-module-squashfs` package then ceases to
+  exist — don't `IMAGE_INSTALL` it); `overlay.ko` staying `=m` is fine (loaded
+  from the mounted root). (2) **libubootenv cannot create `/boot/uboot.env`**
+  ("Cannot initialize environment") — it must pre-exist at exactly
+  `CONFIG_ENV_SIZE` (16 KiB): seed once with `dd` zeros + `fw_setenv -s
+  defenv.txt`; step 5 should ship the blob via `IMAGE_BOOT_FILES`. systemd
+  self-overlays `/var/{cache,lib,spool}` on tmpfs — works on a RO root, no
+  `overlayfs.bbclass` needed.
+
 ## Editor on target
 - Use **busybox `vi`** — decided 2026-09 after evaluating classic nvi 1.81.6:
   it fails to build on wrynose's GCC (2003-era code calls `conv_init`/`conv_enc`
@@ -150,8 +348,14 @@
   compat185 bbappend for `dbopen()`. Not worth it for a Zero W image.
 
 ## Device facts
-- Zero W WiFi/BT chip: BCM43430 (firmware `linux-firmware-rpidistro-bcm43430`
-  comes from the machine conf; driver `brcmfmac` installed in the image).
+- Zero W WiFi/BT chip: BCM43430. `IMAGE_INSTALL` needs **both**
+  `linux-firmware-rpidistro-bcm43430` (the machine-conf RRECOMMENDS did not
+  land it in the 2026-09-18 image) **and** `kernel-module-brcmfmac-cyw`:
+  kernel 6.18 brcmfmac runtime-`request_module()`s the vendor firmware
+  plugin per chip (cyw/bca/wcc); the name is built at runtime in
+  `fwvid.c`, so modpost records no softdep ⇒ the package is never
+  auto-installed; without it `modprobe brcmfmac-cyw` fails and there is no
+  `wlan0` (seen 2026-09-25). Driver `brcmfmac`.
 - Console: UART 115200 8N1; image has dropbear but **root has no password**
   by default (set via serial `passwd`, or lab-only `empty-root-password`).
 - SSH policy: `/etc/default/dropbear` (our `dropbear.default` via the

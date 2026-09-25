@@ -14,6 +14,12 @@ secrets are set):
 - **push/PR to main** — build + `solar-ctl-image-<sha>` artifact (48 MB zip
   contents: `wic.bz2`, `bmap`, `manifest`, `SHA256SUMS`)
 - **tag `v*`** — same build, additionally published as a GitHub Release
+- **`swupdate` job** — runs in parallel and only *compiles* SWUpdate against
+  our musl distro (`kas build fw/kas-swupdate.yml`, no image; it adds the
+  `fw-swupdate/` layer and `meta-swupdate`). It restores the sstate cache but
+  never saves it (the quota is already spent by the image job) and uploads the
+  merged `.config` as `swupdate-dotconfig-<sha>`, because kconfig drops symbols
+  silently and the file is the only proof of what stuck.
 - **caching**: only `build/sstate-cache` (~1.3 GB) is cached —
   `build/downloads` is ~9.5 GB (8.4 GB of it is `git2` bare clones) and
   GitHub's per-repo cache quota is 10 GB, so caching downloads sat at
@@ -45,17 +51,27 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 
 ## Layout
 
-| Path | Purpose |
-| --- | --- |
-| `kas-rpi0.yml` | **Build this** — repos (wrynose branch tips), machine, WiFi creds, local.conf bits |
-| `conf/layer.conf` | `fw/` is a small meta layer (`solar-ctl`) |
-| `conf/distro/solar-ctl.conf` | Our distro: `TCLIBC=musl`, `INIT_MANAGER=systemd`, lean distro features |
-| `recipes-core/images/solar-ctl-image.bb` | Minimal image (dropbear ssh, WiFi) |
-| `recipes-connectivity/solar-wifi/` | WiFi bring-up: supplicant config + systemd units |
-| `recipes-core/dropbear/` | bbappend: root-only key-only SSH config |
-| `recipes-core/solar-rootkeys/` | `/root/.ssh/authorized_keys` (FIDO sk-key, public half) |
-| `recipes-kernel/linux/` | Kernel config slimming + nv3007/solar-rs485 DT overlays (142×428 panel-mipi-dbi TFT) |
-| `recipes-support/rs485ctl/` | RS485 RTS direction-control setup tool |
+| Path                                     | Purpose                                                                                       |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `kas-rpi0.yml`                           | **Build this** — repos (wrynose branch tips), machine, WiFi creds, local.conf bits            |
+| `kas-swupdate.yml`                       | SWUpdate compile gate — includes `kas-rpi0.yml`, adds `fw-swupdate/` + `meta-swupdate`        |
+| `conf/layer.conf`                        | `fw/` is a small meta layer (`solar-ctl`)                                                     |
+| `conf/distro/solar-ctl.conf`             | Our distro: `TCLIBC=musl`, `INIT_MANAGER=systemd`, lean distro features                       |
+| `recipes-core/images/solar-ctl-image.bb` | Minimal image (dropbear ssh, WiFi)                                                            |
+| `recipes-connectivity/solar-wifi/`       | WiFi bring-up: supplicant config + systemd units                                              |
+| `recipes-core/dropbear/`                 | bbappend: root-only key-only SSH config                                                       |
+| `recipes-core/solar-rootkeys/`           | `/root/.ssh/authorized_keys` (FIDO sk-key, public half)                                       |
+| `recipes-kernel/linux/`                  | Kernel config slimming + nv3007/solar-rs485 DT overlays (142×428 panel-mipi-dbi TFT)          |
+| `recipes-support/rs485ctl/`              | RS485 RTS direction-control setup tool                                                        |
+| `docs/swupdate-ota.md`                   | **A/B OTA design record** (squashfs roots, `/etc` overlay, SWUpdate, tryboot)                 |
+| `tools/ota-probe.sh`                     | Read-only on-target probe of boot chain/filesystems (run before OTA work)                     |
+
+One sibling layer lives **outside** `fw/`, at `fw-swupdate/` (repo root): the
+SWUpdate bbappend + kconfig fragment. It is added *only* by `kas-swupdate.yml`,
+never by `kas-rpi0.yml` — a `*.bbappend` in an active layer whose recipe is not
+available is a hard bitbake error, so it cannot live in `fw/` (which every
+build parses) while `meta-swupdate` is absent from the image build. Move it back
+into `fw/` when SWUpdate actually enters the image.
 
 ## Peripherals & wiring (40-pin header)
 
@@ -301,6 +317,34 @@ Three options:
 3. **Ad-hoc** without editing files: `wpa_cli` (`add_network`, `set_network`,
    `select_network`).
 
+## A/B updates (in design)
+
+The disk layout today is the bare meta-raspberrypi default: one vfat boot
+partition + one ext4 rootfs (`sdimage-raspberrypi.wks`), which means "update"
+currently means "reflash". The plan to replace it — two read-only
+**squashfs** root slots, `/etc` as an **overlayfs** on a writable partition,
+a journalled ext4 `/data`, **SWUpdate** as the update agent, and slot
+switching done by the **Raspberry Pi firmware** (`tryboot`, since there is no
+U-Boot) — is recorded in [`docs/swupdate-ota.md`](docs/swupdate-ota.md),
+including which facts are verified and which are still bench questions.
+
+Nothing is in an image yet, but the first unknown is **closed**: the
+`swupdate` job builds `fw/kas-swupdate.yml`, which adds the `fw-swupdate/` gate
+layer + `meta-swupdate` and builds the **`swupdate` recipe only** (no image, no
+`IMAGE_INSTALL` change) — and it compiles against musl, with signing enabled.
+The remaining unknowns are on hardware. To reproduce locally:
+
+```sh
+kas build fw/kas-swupdate.yml            # builds the swupdate recipe only
+```
+
+Before touching the layout, run the read-only probe on current hardware and
+keep the output:
+
+```sh
+scp fw/tools/ota-probe.sh root@<board>:/tmp/ && ssh root@<board> sh /tmp/ota-probe.sh
+```
+
 ## Design notes / caveats
 
 - **No poky**: oe-core ships no distro conf, so we provide our own
@@ -312,7 +356,8 @@ Three options:
   glibc-only bits, expect to patch or drop it.
 - **Kernel modules**: meta-raspberrypi pulls *all* ~1800 modules into every
   rpi image; our image recipe removes that and installs only the `brcmfmac`
-  WiFi stack (BCM43430 firmware comes from the machine conf). Add specific
+  stack plus `linux-firmware-rpidistro-bcm43430` (do not rely on the machine
+  conf RRECOMMENDS — the 2026-09-18 image omitted the firmware). Add specific
   `kernel-module-*` packages to `solar-ctl-image.bb` as needed.
 - **bitbake** has no `wrynose` branch; we pin `2.18`, enforced by oe-core's
   sanity checker.

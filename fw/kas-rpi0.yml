@@ -80,6 +80,21 @@ local_conf_header:
     # Console on the mini-UART so we can log in without a monitor
     # (writes enable_uart=1 into config.txt).
     ENABLE_UART = "1"
+
+    # --- A/B OTA (doc swupdate-ota.md, section 10) --------------------------
+    # Boot Linux via U-Boot instead of start.elf loading the kernel
+    # directly: u-boot.bin is deployed as kernel.img and OUR boot.scr
+    # (rpi-u-boot-scr bbappend in fw/, step 4) picks the slot and appends
+    # the per-slot root=. ENABLE_UART must stay 1: U-Boot + UART=0 is a
+    # hard bbfatal in rpi-config_git.bb, and we want the GPIO14/15
+    # console for the bench.
+    RPI_USE_U_BOOT = "1"
+    # No root= in the firmware cmdline: the per-slot root=/dev/mmcblk0p{2|3}
+    # rootfstype=squashfs rootwait is appended by our boot.scr (step 4). It
+    # is a rpi-cmdline.bb variable (?=), so it must be set here (global),
+    # not in the image recipe. Only valid with RPI_USE_U_BOOT=1 - without
+    # U-Boot, start.elf would hand the kernel a cmdline with no root=.
+    CMDLINE_ROOTFS = ""
     # Zero's USB port is wired as peripheral-only; enable the DWC2 gadget
     # driver if you ever want g_ether (usb0) access from a laptop.
     # ENABLE_DWC2_PERIPHERAL = "1"
