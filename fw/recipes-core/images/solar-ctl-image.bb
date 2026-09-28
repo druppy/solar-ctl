@@ -120,8 +120,10 @@ OVERLAYFS_ETC_CREATE_MOUNT_DIRS = "0"
 # before mounting root, so the kernel-module-squashfs package no longer
 # exists at all.
 # u-boot-env ships /etc/fw_env.config (-> /boot/uboot.env); libubootenv-bin
-# is the wrynose fw_printenv/fw_setenv, so a slot switch is
+# is the wrynose fw_printenv/fw_setenv, so a manual bench slot switch is
 #   mount -o remount,rw /boot; fw_setenv slot b; mount -o remount,ro /boot
+# (swupdate's U-Boot backend writes the SAME env via libubootenv0, and
+# solar-update holds /boot rw around the install for exactly that).
 IMAGE_INSTALL:append = " \
     kernel-module-overlay \
     u-boot-env \

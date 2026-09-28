@@ -324,19 +324,23 @@ firmware, U-Boot, fallback `uImage`, pre-seeded `uboot.env`) + p2/p3
 squashfs-xz root slots + p4 ext4 `/data` holding the `/etc` overlay upper and
 the **per-slot kernels** (`/data/cores/slot-{a,b}/uImage`). U-Boot env `slot=a|b`
 picks the slot; the kernel is loaded from `/data` via `ext4load`, so normal
-updates never write FAT. `BOOTLOADER_NONE` persists nothing, and the p4 `/data`
+updates never write FAT. SWUpdate's U-Boot backend writes `slot` itself (a
+`bootenv` entry in the signed sw-description, flushed only after all images
+installed OK), and the p4 `/data`
 is self-healed at preinit (`e2fsck`, reformat only as last resort). Full
 decision record: [`docs/swupdate-ota.md`](docs/swupdate-ota.md).
 
 Applying an update (on the board):
 
 ```sh
-solar-update /path/to/solar-ctl-image.swu   # verify + install into INACTIVE slot, then fw_setenv slot
-reboot                                      # new slot boots; slot a is kept as fallback
+solar-update -i /path/to/solar-ctl-image.swu      # local file
+solar-update -d "-u https://host/solar-ctl-image.swu"   # or pull from a URL
+reboot                                      # new slot boots; old slot is fallback
 ```
 
 `solar-update` derives the target from `root=` in `/proc/cmdline` (running on
-p2 → install set `alt`/slot-b and vice versa). The `.swu` is ONE file for both
+p2 → install set `alt`/slot-b and vice versa) and holds `/boot` rw long enough
+for the env write. The `.swu` is ONE file for both
 slots (libconfig sets, selected with `-e stable,main|alt`), signed RSA-4096 /
 SHA-256 and verified against `/etc/solar/swupdate.pub.pem`; SWUpdate runs
 on-demand only (its daemon units are stripped from the image).

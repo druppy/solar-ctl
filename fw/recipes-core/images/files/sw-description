@@ -8,8 +8,12 @@
  *
  * No scripts/handlers in the .swu on purpose: SWUpdate is built with
  * SCRIPTS/LUA/SHELLSCRIPTHANDLER off (smallest possible binary), so the
- * .swu is pure data. The slot switch (fw_setenv) happens in the rootfs
- * wrapper AFTER swupdate exits 0.
+ * .swu is pure data. The slot switch is the per-set `bootenv` entry below:
+ * SWUpdate's U-Boot backend writes slot=<a|b> to the real env (libubootenv,
+ * /etc/fw_env.config on p1) ONLY after every image of the selected set
+ * installed successfully (core/installer.c), and its failure fails the
+ * update. /usr/bin/solar-update only detects the current root partition,
+ * picks the set, and holds /boot rw for the duration.
  *
  * hardware-compatibility is checked against /etc/hwrevision (solar-swu-agent).
  * installed-directly=true is MANDATORY on 512 MB: otherwise SWUpdate first
@@ -50,6 +54,13 @@ software =
 				};
 			}
 			);
+			/* Arm the switch: boot.scr reads slot from the U-Boot env. */
+			bootenv = ( { name = "slot"; value = "a"; } );
+			/* Markers default to true: with the U-Boot backend that would be
+			 * extra p1 FAT writes per install for state SWUpdate never reads
+			 * back here (rollback/watchdog is ours, in /data). */
+			bootloader_transaction_marker = false;
+			bootloader_state_marker = false;
 		};
 
 		alt =
@@ -74,6 +85,9 @@ software =
 				};
 			}
 			);
+			bootenv = ( { name = "slot"; value = "b"; } );
+			bootloader_transaction_marker = false;
+			bootloader_state_marker = false;
 		};
 	};
 };

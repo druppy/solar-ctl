@@ -154,7 +154,13 @@ jobs:
             grep -qx 'CONFIG_SIGNED_IMAGES=y' "$cfg" || { echo "::error::$cfg lost CONFIG_SIGNED_IMAGES"; fail=1; }
             grep -qx 'CONFIG_HASH_VERIFY=y' "$cfg" || { echo "::error::$cfg lost CONFIG_HASH_VERIFY"; fail=1; }
             grep -qx 'CONFIG_SIGALG_RAWRSA=y' "$cfg" || { echo "::error::$cfg lost CONFIG_SIGALG_RAWRSA (signing algo!)"; fail=1; }
-            for off in CONFIG_UBOOT CONFIG_MTD CONFIG_WEBSERVER CONFIG_LUA CONFIG_SCRIPTS CONFIG_DOWNLOAD CONFIG_SURICATTA; do
+            # U-Boot backend + explicit default-choice pin (the choice has no
+            # default statement; see the fragment) and the URL download channel.
+            grep -qx 'CONFIG_UBOOT=y' "$cfg" || { echo "::error::$cfg lost CONFIG_UBOOT (slot arm via bootenv!)"; fail=1; }
+            grep -qx 'CONFIG_BOOTLOADER_DEFAULT_UBOOT=y' "$cfg" || { echo "::error::$cfg lost CONFIG_BOOTLOADER_DEFAULT_UBOOT (choice silently flipped?)"; fail=1; }
+            grep -qx 'CONFIG_DOWNLOAD=y' "$cfg" || { echo "::error::$cfg lost CONFIG_DOWNLOAD (-u fetch)"; fail=1; }
+            grep -qx 'CONFIG_DOWNLOAD_SSL=y' "$cfg" || { echo "::error::$cfg lost CONFIG_DOWNLOAD_SSL (https fetch)"; fail=1; }
+            for off in CONFIG_MTD CONFIG_WEBSERVER CONFIG_LUA CONFIG_SCRIPTS CONFIG_SURICATTA; do
               grep -qx "${off}=y" "$cfg" && { echo "::error::$cfg has $off=y (fragment not applied?)"; fail=1; }
             done
           done

@@ -1,23 +1,27 @@
 #!/bin/sh
-# Install a signed .swu into the INACTIVE slot and arm it. Busybox-ash safe.
-# The .swu carries both targets as sets (sw-description); we pick the set
-# that is NOT us, install, then arm the switch with fw_setenv slot=<x>.
+# Install a signed .swu into the INACTIVE slot. Busybox-ash safe.
+# The only slot-topology knowledge here is root= -> set (which set is NOT us);
+# the slot=a|b U-Boot env write lives in the signed sw-description (`bootenv`)
+# and is applied by SWUpdate itself, only after all images installed OK.
 # Doc: fw/docs/swupdate-ota.md §6.
+#
+# usage: solar-update -i <file.swu>
+#        solar-update -d "-u https://host/fw.swu"   [-A|--allow-downgrades ...]
+# All args are forwarded to swupdate after -e stable,<set> -k <key>.
 set -e
 
-SWU="$1"
-if [ -z "$SWU" ] || [ ! -f "$SWU" ]; then
-    echo "usage: solar-update <file.swu>" >&2
+[ $# -ge 1 ] || {
+    echo "usage: solar-update (-i <file.swu> | -d \"-u <url>\") [extra swupdate args]" >&2
     exit 2
-fi
+}
 
 KEY=/etc/solar/swupdate.pub.pem
 [ -f "$KEY" ] || { echo "solar-update: missing $KEY" >&2; exit 1; }
 
 ROOTPART=$(sed -n 's|.*root=/dev/mmcblk0p\([0-9]\{1,2\}\).*|\1|p' /proc/cmdline)
 case "$ROOTPART" in
-    2) SET=alt;  SLOT=b ;;
-    3) SET=main; SLOT=a ;;
+    2) SET=alt ;;   # running slot a -> install slot b
+    3) SET=main ;;  # running slot b -> install slot a
     *) echo "solar-update: unexpected root= partition '$ROOTPART' (not p2/p3?)" >&2
        exit 1 ;;
 esac
@@ -25,16 +29,18 @@ esac
 # The raw handler needs the target files' parents to exist.
 mkdir -p /data/cores/slot-a /data/cores/slot-b
 
-echo "solar-update: installing set '$SET' (slot $SLOT) from $SWU"
-if ! swupdate -i "$SWU" -e "stable,$SET" -k "$KEY"; then
-    echo "solar-update: swupdate FAILED - slot $SLOT not armed" >&2
+# The env write (bootenv flush) lands on p1, which is mounted ro by default:
+# libubootenv - the same target fw_setenv uses - cannot write it otherwise.
+# Hold /boot rw for the whole run (the flush happens inside swupdate).
+mount -o remount,rw /boot
+trap 'mount -o remount,ro /boot' EXIT INT TERM
+
+echo "solar-update: installing set 'stable,$SET' ($*)"
+if ! swupdate -e "stable,$SET" -k "$KEY" "$@"; then
+    echo "solar-update: swupdate FAILED - slot NOT armed" >&2
     exit 1
 fi
 
-# Arm the switch: one deliberate FAT write on p1 (ro by default).
-mount -o remount,rw /boot
-fw_setenv slot "$SLOT"
-sync
-mount -o remount,ro /boot
-
-echo "solar-update: slot $SLOT installed and armed. Reboot to switch."
+# Exit 0 implies SWUpdate already wrote slot=<x> (bootenv flush is part of
+# the install; its failure fails the update). Reboot to switch slots.
+echo "solar-update: installed and armed. Reboot to switch."

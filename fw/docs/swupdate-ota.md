@@ -486,6 +486,27 @@ liblua left DEPENDS with them). The compile gate itself is retired: the
 fragment live in `fw/recipes-support/swupdate/` (kas-rpi0.yml now adds
 meta-swupdate, so the dangling-bbappend rule is satisfied), and the merged
 kconfig asserts moved into the main firmware job.
+
+**[implemented 2026-09-28, part 2 — supersedes the `UBOOT`=off / `BOOTLOADER_NONE`
+intent above]** U-Boot is on the board now (§5/§7), so the bootloader stance
+flipped: `CONFIG_UBOOT=y` + **explicit** `CONFIG_BOOTLOADER_DEFAULT_UBOOT=y`
+(the "Default Bootloader Interface" `choice` has no `default` statement and
+UBOOT precedes NONE in it — enabling UBOOT silently flips the choice
+`[wrynose]`). The slot arm is now a per-set `bootenv = ( { name = "slot";
+value = "a"; } );` entry in the signed sw-description (the parser resolves
+`bootenv` through the same set-path search as `images` `[wrynose]`), which
+SWUpdate flushes via libubootenv (`/etc/fw_env.config` — the exact target
+`fw_setenv` uses, and `libubootenv0` + `u-boot-env` already ship) **only after
+every image of the set installed** (`core/installer.c` runs it after the
+install loop; its failure fails the update). `/usr/bin/solar-update` shrank to
+root=-detect + `/boot` rw window; scripts stay OUT (§6.5 reasoning holds).
+`DOWNLOAD`/`DOWNLOAD_SSL` are now **on** — fetch by URL, `solar-update -d
+"-u https://host/fw.swu"`; that is the only curl+TLS DEPENDS/RDEPENDS in the
+build and nothing listens (`WEBSERVER` still off; the device pulls). Edge: if
+the on-disk env cannot be opened, `uboot.c` loads `UBOOT_DEFAULTENV`
+(`/etc/u-boot-initial-env`) and a later `env_store()` would overwrite
+`uboot.env` with it; that file is deliberately not in the image, so the
+failure path errors instead of rewriting the board env. `[wrynose]`
 | `WEBSERVER` / `MONGOOSE(SSL)`      | y         | y           | stage 1 delivery; `MONGOOSESSL` is web TLS only    |
 | `HW_COMPATIBILITY`                 | y         | y           | ⇒ `/etc/hwrevision` is **mandatory**               |
 | `SURICATTA` (+ `CURL`/`CURL_SSL`)  | n         | n (later)   | **this is the Hawkbit client**; `CURL*` are hidden |
@@ -497,10 +518,17 @@ kconfig asserts moved into the main firmware job.
 
 - **No RPi bootloader interface.** Bootloader backends are
   `none`/`ebg`/`uboot`/`grub`/`cboot`; there is no `sysboot`/tryboot handler.
-  → set `bootloader_transaction_marker = false;` and
-  `bootloader_state_marker = false;` and do the switch in a script/preinstall.
+  ~~→ set `bootloader_transaction_marker = false;` and
+  `bootloader_state_marker = false;` and do the switch in a script/preinstall.~~
+  The markers stay false (now as per-set properties in `sw-description` — they
+  default to true, which would cost extra p1 FAT writes per install for state
+  nothing reads back), but the switch no longer needs a script: with the
+  U-Boot backend the `bootenv` section does it (§6.2 part 2).
 - **Update state cannot be stored "in the bootloader", and the Kconfig will
-  not warn you.** The "Update Status Storage" choice (`bootloader/Kconfig`) has
+  not warn you.** *(2026-09-28: moot for the slot switch — the U-Boot backend
+  is now selected, so the bootloader env really persists; the analysis below
+  stands as the reason `BOOTLOADER_NONE` was never usable.)* The "Update Status
+  Storage" choice (`bootloader/Kconfig`) has
   exactly **one** option, `UPDATE_STATE_CHOICE_BOOTLOADER`, and it depends on
   `BOOTLOADER_EBG || UBOOT || BOOTLOADER_NONE || BOOTLOADER_GRUB` — so picking
   `BOOTLOADER_NONE` *forces* it on (a choice with one visible option is not
@@ -536,10 +564,13 @@ kconfig asserts moved into the main firmware job.
 
 This repo is public and an unsigned OTA endpoint is remote root. **[implemented
 2026-09-28]** the web UI is compiled OUT entirely (`WEBSERVER`/`MONGOOSE` off,
-so nothing listens); delivery is a signed file plus the on-demand CLI:
+so nothing listens); delivery is a signed file (or a URL pull, `DOWNLOAD=y`
+— `solar-update -d "-u https://..."`) plus the on-demand CLI:
 `swupdate -i f.swu -e stable,<set> -k /etc/solar/swupdate.pub.pem`, wrapped by
-`/usr/bin/solar-update` (derives the set from `root=` in `/proc/cmdline`, arms
-the switch afterwards). One `.swu` carries BOTH slots as libconfig sets
+`/usr/bin/solar-update` (derives the set from `root=` in `/proc/cmdline` and
+holds `/boot` rw; the arm itself is the `bootenv` entry, flushed by SWUpdate
+on success — no `fw_setenv` in the wrapper anymore). One `.swu` carries BOTH
+slots as libconfig sets
 (`main` → p2 + `/data/cores/slot-a/uImage`, `alt` → p3 + slot-b).
 Algorithm: **RSA-4096, PKCS#1 v1.5, SHA-256** (`CONFIG_SIGALG_RAWRSA`, CI-
 asserted). ed25519 is impossible on both ends: SWUpdate streams
@@ -1040,10 +1071,13 @@ Then update §5 (which tier is the plan of record), this matrix, and `.rules`.
 - 512 MB RAM: no double-copy installs (see 6.3), and `mksquashfs -b 262144`
   style tuning is a build-host concern, not a target one.
 - SD cards: ext4 journal on `/data` is our choice, but keep FAT writes rare.
-- **No `bootstate=` / `set_bootloader_state` / `swupdate-env` anywhere**: with
+- ~~**No `bootstate=` / `set_bootloader_state` / `swupdate-env` anywhere**: with
   `BOOTLOADER_NONE` the "bootloader environment" is a RAM dict, so those calls
   succeed and persist nothing (see 6.3; 6.6 has the one no-new-code way out).
-  Boot state lives in `/data`.
+  Boot state lives in `/data`.~~ (2026-09-28: the U-Boot backend is selected
+  now, so these calls really persist — but keep the bookkeeping in `/data`
+  anyway: FAT writes on p1 must stay rare, and rollback logic there is simpler
+  to test.) Boot state lives in `/data`.
 - Project rules still bind the implementation: `S = "${UNPACKDIR}"`; no line
   starting with `}` inside recipe functions; `IMAGE_BOOT_FILES` /
   `RPI_KERNEL_DEVICETREE_OVERLAYS` set in **kas `local_conf_header`**, not a
@@ -1086,4 +1120,7 @@ Then update §5 (which tier is the plan of record), this matrix, and `.rules`.
    `overlayfs-etc` with `CREATE_MOUNT_DIRS="0"`.
 5. SWUpdate in the image (`CONFIG_UBOOT=y`); bench A→B→A. Env on `/data`, never
    the RAM `BOOTLOADER_NONE` dict. `installed-directly=true`. Never OTA p1.
+   **DONE in-tree 2026-09-28 (part 2 above): env lives on p1 `uboot.env`**
+   (U-Boot backend + `bootenv` section), which supersedes "env on `/data`" —
+   still never the RAM dict. Bench A→B→A through `solar-update` still open.
 6. Web UI **after** signing is switched on; Hawkbit (`SURICATTA`) last.

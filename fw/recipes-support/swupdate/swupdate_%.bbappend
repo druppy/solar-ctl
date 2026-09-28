@@ -1,8 +1,10 @@
 # solar-ctl SWUpdate build-time configuration.
 #
-# Scope: fw/kas-swupdate.yml builds this recipe to find out whether SWUpdate
-# compiles on our musl/wrynose distro (fw/docs/swupdate-ota.md §10.1). It is
-# deliberately NOT in any image yet - see the README's A/B updates section.
+# Scope: SWUpdate is now IN the image (solar-ctl-image.bb IMAGE_INSTALL);
+# the fw-swupdate gate layer and fw/kas-swupdate.yml are retired. This
+# bbappend is only safe inside the always-active fw/ layer because
+# fw/kas-rpi0.yml adds meta-swupdate in the same commit - a bbappend whose
+# recipe is invisible is a hard bitbake error on wrynose (.rules gotcha).
 #
 # swupdate.inc has no PACKAGECONFIG. Instead it inherits cml1, so any *.cfg
 # file in SRC_URI is merged over the recipe's defconfig (merge_config.sh -m,

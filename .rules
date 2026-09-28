@@ -165,10 +165,11 @@
   because `fw/kas-rpi0.yml` adds the meta-swupdate repo (dangling-bbappend
   gotcha). swupdate IS in `IMAGE_INSTALL` (on-demand CLI; its auto-enabled
   `.service`/`.socket` are deleted by an image postprocess fn).
-  Merged-kconfig asserts (SIGNED_IMAGES/SIGALG_RAWRSA/HASH_VERIFY=y;
-  UBOOT/MTD/WEBSERVER/LUA/SCRIPTS/DOWNLOAD/SURICATTA not =y) moved into the
-  main firmware CI job, reading the `${T}/swupdate-merged-dotconfig` snapshot
-  the bbappend still writes (`rm_work` never deletes `temp`).
+  Merged-kconfig asserts (SIGNED_IMAGES/SIGALG_RAWRSA/HASH_VERIFY=y and —
+  since the 2026-09-28 bootloader flip below — UBOOT/BOOTLOADER_DEFAULT_UBOOT/
+  DOWNLOAD/DOWNLOAD_SSL=y; MTD/WEBSERVER/LUA/SCRIPTS/SURICATTA not =y) moved
+  into the main firmware CI job, reading the `${T}/swupdate-merged-dotconfig`
+  snapshot the bbappend still writes (`rm_work` never deletes `temp`).
 - **Signing: RSA-4096, PKCS#1 v1.5, SHA-256 — ed25519 is impossible**
   (verified against swupdate 2026.05.1 sources + U-Boot FIT: SWUpdate streams
   `EVP_DigestVerifyUpdate/Final`, OpenSSL ed25519 is one-shot only, `openssl
@@ -188,9 +189,16 @@
   `files/sw-description`): `stable = { main = p2 + /data/cores/slot-a/uImage;
   alt = p3 + slot-b }`, chosen at install: `swupdate -i f.swu -e
   stable,main|alt -k /etc/solar/swupdate.pub.pem`. `/usr/bin/solar-update`
-  (recipe `solar-swu-agent`) derives the set from `root=` in /proc/cmdline,
-  mkdirs `/data/cores/slot-{a,b}`, runs swupdate, then arms with rw-remount
-  /boot + `fw_setenv slot`. NO scripts in the .swu (LUA/SCRIPTS/SHELLHANDLER
+  (recipe `solar-swu-agent`) ONLY derives the set from `root=` in
+  /proc/cmdline, mkdirs `/data/cores/slot-{a,b}`, holds /boot rw (trap
+  remounts ro on EXIT) and forwards args to swupdate — both `-i f.swu` and
+  `-d "-u https://..."` work (CONFIG_DOWNLOAD+DOWNLOAD_SSL now on; curl+TLS
+  in the image, nothing listens). The ARM is a per-set `bootenv = {name=
+  "slot"; value="a|b"}` entry in sw-description: the parser resolves `bootenv`
+  through the SAME set-path search as `images`, and the U-Boot backend flushes
+  it via libubootenv (/etc/fw_env.config, same target as fw_setenv) ONLY after
+  every image of the set installed (core/installer.c); env-write failure fails
+  the update. NO scripts in the .swu (LUA/SCRIPTS/SHELLHANDLER
   compiled out — pure-data payload, smaller binary, liblua dropped);
   hardware-compatibility against `/etc/hwrevision` (=1.0) is LIVE once
   swupdate ships. Recipe facts: NOT an image recipe — `inherit
@@ -230,7 +238,9 @@
   the class renders the template with python `str.format()` — any literal
   `{`/`}` (even in comments, and shell-function braces) breaks do_rootfs;
   the upstream template is brace-free for exactly this reason.
-- **SWUpdate update state is a trap with `BOOTLOADER_NONE`**: the "Update Status
+- **SWUpdate update state was a trap with `BOOTLOADER_NONE`** (void for our
+  config 2026-09-28: U-Boot backend is selected now, so those calls persist —
+  kept as knowledge, NONE is still compiled in): the "Update Status
   Storage" choice has exactly ONE option (`UPDATE_STATE_CHOICE_BOOTLOADER`,
   which `depends on ... || BOOTLOADER_NONE || ...`), so it is force-enabled and
   there is no file-based option to pick. `bootloader/none.c` implements the env
@@ -275,21 +285,45 @@
   flags + `defconfig` + `find_cfgs()` (every SRC_URI `*.cfg`) then
   `merge_config.sh -m` (last wins) + `olddefconfig`. Ours:
   `fw/recipes-support/swupdate/swupdate/solar-ctl.cfg`.
-  DEPENDS are computed from the **merged** config text, and the fragment regex
+  DEPENDS are computed by an anon python in `swupdate.inc` over the **text of
+  defconfig overlaid with every SRC_URI `*.cfg`** (regex
+  `^(?:# )?(CONFIG_*)[= ]`), not the merged `.config` — so `CONFIG_DOWNLOAD=y`
+  in our fragment really adds `curl` (mapping: `DOWNLOAD`|`SURICATTA`→curl,
+  `UBOOT`→libubootenv DEPENDS **+ RDEPENDS**, `SSL_IMPL_OPENSSL`→openssl...).
+  **Parse-cache trap (hit 2026-09-28):** that python reads the fragment files
+  directly, outside bitbake's parse-cache file tracking — editing
+  `solar-ctl.cfg` on a warm cache yields a STALE parse (old DEPENDS) plus the
+  "metadata is not deterministic" basehash errors, and the task then runs with
+  an old sysroot (symptom: `channel_curl.c: fatal error: curl/curl.h` while
+  `bitbake -e swupdate` *now* shows curl in DEPENDS). Fix: `rm -rf build/cache`
+  (full re-parse; sstate untouched) before the next build after a fragment
+  edit. And the fragment regex
   accepts `# CONFIG_FOO is not set`, so that form really removes a base `y` and
   its DEPENDS. Trap: `HAVE_*` are `option env=` symbols probed from the sysroot
   by SWUpdate's own Makefile, so **olddefconfig silently drops** any symbol with
   an unmet `depends on HAVE_*` — never trust "the fragment was applied", read
   the merged `.config` (CI dumps it). `CURL`/`CURL_SSL` are **hidden** (only via
   `SURICATTA`/`DOWNLOAD*`). `libubootenv`/`libconfig`/`json-c` are unconditional
-  DEPENDS. Shipped defconfig is wrong for us: `CONFIG_UBOOT=y` (swupdate must
-  not touch the U-Boot env — fw_setenv owns it), `SURICATTA`/`CURL`/
-  `SIGNED_IMAGES`/`HASH_VERIFY` all off. Hawkbit =
+  DEPENDS. Shipped defconfig is wrong for us: `SURICATTA`/`CURL`/
+  `SIGNED_IMAGES`/`HASH_VERIFY` all off (note: `CONFIG_UBOOT=y` — the shipped
+  `y` was right for us ALL ALONG only since 2026-09-28; we previously turned it
+  off because swupdate must not touch the env while fw_setenv owned it — now
+  swupdate IS the env writer, see the single-.swu bullet). Hawkbit =
   just `CONFIG_SURICATTA=y` (+CURL_SSL) — a config, not a protocol to implement.
   No RPi bootloader handler exists (`none/ebg/uboot/grub/cboot` only; and
-  `BOOTLOADER_NONE` is `default y`) → set
-  `bootloader_transaction_marker=false; bootloader_state_marker=false;` and
-  switch slots ourselves; no `dual_copy` property — standby slot is our job.
+  `BOOTLOADER_NONE` is `default y`) → `bootloader_transaction_marker=false;
+  bootloader_state_marker=false;` stay (as per-set properties — default true
+  would add p1 FAT writes per install) but the switch is done by the `bootenv`
+  section via the U-Boot backend; no `dual_copy` property — standby slot is
+  our job.
+  **Choice trap (verified 2026-09-28, bootloader/Kconfig):** the `choice
+  "Default Bootloader Interface"` has no `default` statement and UBOOT precedes
+  NONE — `CONFIG_UBOOT=y` alone silently flips the default; pin
+  `CONFIG_BOOTLOADER_DEFAULT_UBOOT=y`. Related edge: if the on-disk env cannot
+  be opened, `uboot.c` loads `UBOOT_DEFAULTENV` (/etc/u-boot-initial-env) and a
+  later `env_store()` OVERWRITES uboot.env with it; that file is deliberately
+  absent from our image so this path errors instead (libubootenv0 +
+  libubootenv-bin + u-boot-env/fw_env.config already ship — needed anyway).
   `installed-directly=true` is **mandatory on 512 MB** (else it extracts to
   tmpfs /tmp). `swupdate-www/-client/-ipc/-lua/-progress/-tools/-usb` are
   packages of `swupdate`. The layer also ships **bbclasses** —
