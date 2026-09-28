@@ -158,7 +158,9 @@
 - Target: A/B **squashfs-xz** read-only roots + `/etc` overlay + ext4 `/data`;
   slot switch via **U-Boot env `slot=a|b`** (plan of record since 2026-09-25,
   bench test 5 PASS). Milestone image validated on bench; signed OTA flow
-  implemented 2026-09-28 (bench validation of the update path still pending).
+  implemented 2026-09-28 and **bench-verified 2026-09-28** (URL install +
+  auto-reboot B→A, `-n` + manual reboot A→B; results in
+  `fw/docs/bench-2026-09-24.md` "OTA update flow verified").
 - **Gate retired** (2026-09-28): `fw/kas-swupdate.yml`, the `fw-swupdate`
   layer and the parallel CI `swupdate` job are deleted. The bbappend + kconfig
   fragment now live in `fw/recipes-support/swupdate/` and are only legal there
@@ -230,8 +232,15 @@
   every image of the set installed (core/installer.c); env-write failure fails
   the update. NO scripts in the .swu (LUA/SCRIPTS/SHELLHANDLER
   compiled out — pure-data payload, smaller binary, liblua dropped);
-  hardware-compatibility against `/etc/hwrevision` (=1.0) is LIVE once
-  swupdate ships. Recipe facts: NOT an image recipe — `inherit
+  hardware-compatibility against `/etc/hwrevision` is LIVE (bench 2026-09-28):
+  the file MUST be two tokens `<boardname> <revision>` (`hw-compatibility.c`
+  `fscanf("%ms %ms")`, needs ret==2; the list matches the SECOND token only) —
+  a lone `1.0` failed every install with "SW not compatible with hardware";
+  we ship `solar-ctl 1.0`. The per-slot kernel image entry MUST be
+  `type = "rawfile"` + `path = ...` (FILE_HANDLER, legal in `images:` —
+  core/parser.c resolves IMAGE|FILE): `raw` open()s `device=` O_RDWR without
+  O_CREAT → "Error streaming uImage" installing into an empty slot dir
+  (bench 2026-09-28). Recipe facts: NOT an image recipe — `inherit
   swupdate-common solar-swu-signing image-artifact-names` (without the last,
   IMAGE_NAME/IMAGE_LINK_NAME are unset → dashed filenames), `S = "${UNPACKDIR}"`
   comes from the class, full entry names in `SWUPDATE_IMAGES` are matched
@@ -250,9 +259,17 @@
 - **sw-description gotchas** (verified by building it): libconfig comments
   must be `/* */`; the `$fn(...)`/`@@VAR@@` expansion regex scans **every
   line including comments** — mentioning `$swupdate_get_sha256(...)` in a
-  comment makes do_swuimage try to hash a file named `...`; sha256 values
-  belong in `properties` and expand at build time from files staged in
-  WORKDIR by the class itself.
+  comment makes do_swuimage try to hash a file named `...`. **`sha256` /
+  `installed-directly` are DIRECT image-entry attributes** in 2026.05.1
+  (`parser/parser.c` `parse_common_attributes`); inside `properties{}` they are
+  an opaque handler-only string dict and the install dies at runtime with
+  "Hash not set for ..." (bench 2026-09-28 — an earlier grep of `sha256 =`
+  matched both layouts and gave a false pass). Values expand at build time
+  from files staged in WORKDIR by the class itself. `do_swuimage` also replayed
+  STALE sstate on sw-description edits (bare `addtask swuimage before do_build`
+  has no hash link to this recipe's own unpack — "task Succeeded" while
+  deploying the old artifact); fixed via
+  `do_swuimage[depends] += "${PN}:do_unpack"`.
 - **Kernel/dtb off p1** (user decision 2026-09-28): per-slot kernels are
   regular files on ext4 `/data`; boot.scr does `ext4load mmc 0:4
   ${kernel_addr_r} /cores/slot-${slot}/uImage` (p**4**! not 0:3), falls back
@@ -279,6 +296,19 @@
   class owns DEPLOYDIR; setting `do_deploy[dirs]="${DEPLOYDIR}"` by hand trips
   the WORKDIR-pollution guard). Lands on p1 via `IMAGE_BOOT_FILES:append = "
   uboot.env"` + `DEPENDS += solar-uboot-env`.
+- **Nothing mounts `/boot` automatically** (bench 2026-09-28): the wrynose
+  direct imager writes NO fstab line for the wks `/boot` mountpoint (stock OE
+  fstab ships) — a fresh boot has p1 unmounted, so `fw_printenv` dies with
+  "Cannot initialize environment" and `solar-update`'s
+  `mount -o remount,rw /boot` aborts (`set -e`). Fix = `boot.mount` unit in
+  solar-swu-agent (`What=/dev/disk/by-label/boot`, vfat, `ro`; enabled via
+  `SYSTEMD_SERVICE`). A recipe must NOT `install -d ${D}/boot` (installed-vs-shipped
+  QA; the dir already exists in the base rootfs). Overlay trap while
+  debugging: writing a file directly into the /etc overlay UPPER
+  (`/data/overlay-etc/upper/...`) does not appear through the mounted /etc
+  (cached dentry) — write THROUGH /etc instead. Journald is VOLATILE (no
+  persistent journal): progress-service logs die at reboot, so for
+  auto-rebooting updates the live serial capture is the evidence.
 - **/data (p4) self-heal in the overlayfs-etc preinit**: image ships its own
   `OVERLAYFS_ETC_INIT_TEMPLATE` (`files/solar-overlayfs-etc-preinit.sh.in`):
   mount → e2fsck -y → mkfs.ext4 -F last resort; boot never blocks. **Trap:**

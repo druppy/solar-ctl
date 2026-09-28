@@ -577,9 +577,14 @@ unit around the same binary. `[wrynose]`
 - **No `dual_copy` property** (that is RAUC vocabulary). Standby-slot
   selection is ours: two `images:` entries +
   `swupdate -i x.swu --select stable,copy-B`.
-- `raw` handler opens `img->device` as a **literal path** — use
-  `/dev/disk/by-label/rootfs-b`, not `PARTUUID=`/`LABEL=` guesses, or use
-  `rawfile` (`device=` + `filesystem=` + `properties={atomic-install="true";}`).
+- `raw` handler opens `img->device` as a **literal path** with `O_RDWR` and
+  **no `O_CREAT`** — it can only overwrite existing block devices. Writing a
+  regular file (our `/data/cores/slot-x/uImage`) needs `type = "rawfile"` +
+  `path = "..."`; `rawfile` is a FILE_HANDLER but the `images` list resolves
+  IMAGE|FILE handlers (`core/parser.c`), so it is legal there. `[bench]`
+  2026-09-28: as `type = "raw"` the kernel entry failed with "Error streaming
+  uImage". (Optional rawfile extras: `device=` + `filesystem=` auto-mounts the
+  target fs, `properties={atomic-install="true";}` writes via `.tmp`+rename.)
 - `installed-directly = true` means **zero-copy streaming into the device**.
   On 512 MB RAM this is **mandatory**: without it SWUpdate extracts into
   tmpfs `/tmp` first and our ~350 MB slot does not fit twice.
@@ -599,21 +604,32 @@ so nothing listens); delivery is a signed file (or a URL pull, `DOWNLOAD=y`
 `swupdate -i f.swu -e stable,<set> -k /etc/solar/swupdate.pub.pem`, wrapped by
 `/usr/bin/solar-update` (derives the set from `root=` in `/proc/cmdline` and
 holds `/boot` rw; the arm itself is the `bootenv` entry, flushed by SWUpdate
-on success — no `fw_setenv` in the wrapper anymore). One `.swu` carries BOTH
+on success — no `fw_setenv` in the wrapper anymore). Nothing mounts `/boot`
+at boot: the direct imager writes no fstab line for the wks mountpoint (the
+stock OE fstab ships untouched), so `solar-swu-agent` ships a `boot.mount`
+unit (`/dev/disk/by-label/boot`, ro) — without it `fw_printenv` and
+solar-update's `mount -o remount,rw /boot` both fail on a fresh boot.
+`[bench]` 2026-09-28. One `.swu` carries BOTH
 slots as libconfig sets
 (`main` → p2 + `/data/cores/slot-a/uImage`, `alt` → p3 + slot-b).
 Algorithm: **RSA-4096, PKCS#1 v1.5, SHA-256** (`CONFIG_SIGALG_RAWRSA`, CI-
 asserted). ed25519 is impossible on both ends: SWUpdate streams
 `EVP_DigestVerifyUpdate/Final` (OpenSSL ed25519 is one-shot only, `openssl
 dgst -sign` refuses it) and U-Boot FIT has no ed25519 — which matters because
-the SAME keypair is planned for FIT verified boot later. `[master] [bench-pending]`
+the SAME keypair is planned for FIT verified boot later. `[master] [bench]`
+(2026-09-28: real-key RSA-4096 chain verified end-to-end on the bench —
+`openssl dgst` on the artifact and installs ran with the pub key baked in the image)
 
 Key plumbing mirrors the WiFi policy (`fw/classes/solar-swu-signing.bbclass`):
 `SOLAR_SWU_PRIVATE_KEY`/`SOLAR_SWU_PUBLIC_KEY` env values are PEM **content**
 or an **absolute host path**; empty falls back to the committed throwaway dev
 key with a loud warning. Public key + `/etc/hwrevision` are shipped by
 `solar-swu-agent`; `hardware-compatibility = ["1.0"]` in sw-description makes
-the check live.
+the check live. **`/etc/hwrevision` must be two tokens, `"<boardname>
+<revision>"`** — `hw-compatibility.c` does `fscanf("%ms %ms")` and fails
+(`ret != 2`) on a one-token file, surfacing as "SW not compatible with
+hardware"; the list matches the SECOND token only. We ship `solar-ctl 1.0`.
+`[bench]` 2026-09-28
 
 The compile gate confirms the SSL side is not probed away: the merged config
 keeps `CONFIG_SSL_IMPL_OPENSSL=y` (GPGME/mbedTLS/WOLFSSL off) alongside

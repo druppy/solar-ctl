@@ -48,5 +48,14 @@ do_configure[noexec] = "1"
 do_compile[noexec] = "1"
 
 addtask swuimage before do_build
+# do_swuimage[depends] is NOT enough: swupdate-common only wires the
+# IMAGE_DEPENDS of other recipes, and the class does a bare
+# `addtask swuimage before do_build` - there is NO ordering or hash link to
+# this recipe's own do_unpack. Result (hit 2026-09-28): editing
+# sw-description re-ran do_unpack, but do_swuimage's hash was unchanged and
+# sstate REPLAYED the old artifact - the rebuild "succeeded" while deploying
+# the pre-edit .swu. Pin the unpack task into the hash equation so SRC_URI
+# file edits (sw-description!) always regenerate the artifact.
+do_swuimage[depends] += "${PN}:do_unpack"
 
 COMPATIBLE_MACHINE = "^raspberrypi"

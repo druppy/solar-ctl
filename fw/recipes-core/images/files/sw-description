@@ -15,14 +15,21 @@
  * update. /usr/bin/solar-update only detects the current root partition,
  * picks the set, and holds /boot rw for the duration.
  *
- * hardware-compatibility is checked against /etc/hwrevision (solar-swu-agent).
+ * hardware-compatibility is checked against /etc/hwrevision (solar-swu-agent);
+ * that file MUST be "<boardname> <revision>" (two tokens, hw-compatibility.c
+ * fscanf) - the matching happens against the SECOND token only.
  * reboot = true: declaration only - the SWUpdate CORE never reboots (verified
- * 2026.05.1 sources: the flag only feeds suricatta/progress notifications,
- * and the swupdate-progress helper would use a raw reboot(2) syscall). The
- * systemd orderly reboot is issued by /usr/bin/solar-update after exit 0.
+ * 2026.05.1 sources: the flag only feeds suricatta/progress notifications).
+ * The orderly systemd reboot is done by solar-swupdate-progress.service
+ * (swupdate-progress observes SUCCESS and runs the solar-swu-reboot gate).
  * installed-directly=true is MANDATORY on 512 MB: otherwise SWUpdate first
  * unpacks the payload into tmpfs /tmp.
  * C-style comments only: libconfig grammar.
+ * sha256/installed-directly are DIRECT image-entry attributes: the 2026.05.1
+ * unified parser (parser/parser.c, parse_common_attributes) reads them from
+ * the image node itself, while a `properties` block became an opaque
+ * handler-only string dict - hashes hidden there trigger
+ * "Hash not set for ..." (bench 2026-09-28).
  * The sha256 values below use the swupdate_get_sha256() macro, expanded by
  * swupdate-common.bbclass at build time (NEVER mention that macro with a
  * leading dollar sign in a comment: the expansion regex scans every line,
@@ -44,19 +51,20 @@ software =
 				filename = "solar-ctl-image-raspberrypi0-wifi.rootfs.squashfs-xz";
 				device = "/dev/mmcblk0p2";
 				type = "raw";
-				properties = {
-					installed-directly = true;
-					sha256 = "$swupdate_get_sha256(solar-ctl-image-raspberrypi0-wifi.rootfs.squashfs-xz)";
-				};
+				installed-directly = true;
+				sha256 = "$swupdate_get_sha256(solar-ctl-image-raspberrypi0-wifi.rootfs.squashfs-xz)";
 			},
 			{
+				/* rawfile, NOT raw: install_raw_image open()s device= without
+				 * O_CREAT, so a not-yet-existing regular file fails
+				 * ("Error streaming uImage", bench 2026-09-28). rawfile
+				 * (FILE_HANDLER) takes path= and creates it; the images
+				 * list resolves IMAGE|FILE handlers (core/parser.c). */
 				filename = "uImage";
-				device = "/data/cores/slot-a/uImage";
-				type = "raw";
-				properties = {
-					installed-directly = true;
-					sha256 = "$swupdate_get_sha256(uImage)";
-				};
+				path = "/data/cores/slot-a/uImage";
+				type = "rawfile";
+				installed-directly = true;
+				sha256 = "$swupdate_get_sha256(uImage)";
 			}
 			);
 			/* Arm the switch: boot.scr reads slot from the U-Boot env. */
@@ -75,19 +83,15 @@ software =
 				filename = "solar-ctl-image-raspberrypi0-wifi.rootfs.squashfs-xz";
 				device = "/dev/mmcblk0p3";
 				type = "raw";
-				properties = {
-					installed-directly = true;
-					sha256 = "$swupdate_get_sha256(solar-ctl-image-raspberrypi0-wifi.rootfs.squashfs-xz)";
-				};
+				installed-directly = true;
+				sha256 = "$swupdate_get_sha256(solar-ctl-image-raspberrypi0-wifi.rootfs.squashfs-xz)";
 			},
 			{
 				filename = "uImage";
-				device = "/data/cores/slot-b/uImage";
-				type = "raw";
-				properties = {
-					installed-directly = true;
-					sha256 = "$swupdate_get_sha256(uImage)";
-				};
+				path = "/data/cores/slot-b/uImage";
+				type = "rawfile";
+				installed-directly = true;
+				sha256 = "$swupdate_get_sha256(uImage)";
 			}
 			);
 			bootenv = ( { name = "slot"; value = "b"; } );

@@ -18,6 +18,7 @@ SRC_URI = " \
     file://solar-cores-seed.service \
     file://solar-swupdate-progress.service \
     file://solar-swu-reboot \
+    file://boot.mount \
     file://hwrevision \
 "
 
@@ -39,6 +40,7 @@ do_install() {
     install -m 0755 ${S}/solar-swu-reboot ${D}${libexecdir}/solar-swu-reboot
     install -m 0644 ${S}/solar-cores-seed.service ${D}${systemd_system_unitdir}/
     install -m 0644 ${S}/solar-swupdate-progress.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${S}/boot.mount ${D}${systemd_system_unitdir}/
     install -m 0644 ${S}/hwrevision ${D}${sysconfdir}/hwrevision
     install -m 0644 ${WORKDIR}/swu-signing/public.pem \
         ${D}${sysconfdir}/solar/swupdate.pub.pem
@@ -46,7 +48,7 @@ do_install() {
 
 # Enabling: the systemd class ships the units in FILES and runs the native
 # systemctl wrapper at rootfs assembly (works on the RO rootfs).
-SYSTEMD_SERVICE:${PN} = "solar-cores-seed.service solar-swupdate-progress.service"
+SYSTEMD_SERVICE:${PN} = "solar-cores-seed.service solar-swupdate-progress.service boot.mount"
 
 RDEPENDS:${PN} += "swupdate swupdate-progress libubootenv-bin"
 
