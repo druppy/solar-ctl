@@ -517,6 +517,21 @@ syscall would bypass the unmount of rw `/data`, the wrapper issues
 `systemctl reboot` after swupdate exits 0 (5 s Ctrl-C window). The
 `reboot = true` line stays in the description as a declaration — it is what
 SURICATTA (stage 3) will consult. `[wrynose]`
+**2026-09-28 follow-up (user decision, supersedes the wrapper-reboot leg
+above):** `swupdate-progress` now runs as `solar-swupdate-progress.service`
+(ours, in solar-swu-agent) — every update is journald-logged and on SUCCESS it
+runs `solar-swu-reboot` → `systemctl reboot`; the wrapper no longer reboots.
+Source-verified in 2026.05.1: the progress server starts on **every** swupdate
+run (`core/swupdate.c:1116`, incl. CLI `-i`/`-d`), so a receive-only watcher
+fires for all installs; `-w` blocks silently until the socket exists; `-r` con-
+sumes the next word as the script via `system()`. Socket path follows
+`$RUNTIME_DIRECTORY` (`ipc/progress_ipc.c`) — our unit must **not** set
+`RuntimeDirectory=` or it would miss swupdate launched from a shell (both land
+on `/tmp/swupdateprog`). No CLI flag suppresses the reboot (`-R` is
+no-reinstalling), hence the one-shot `/run/solar-update/no-reboot` gate.
+Upstream `swupdate-progress.service` (package `${PN}-progress`) is
+`WantedBy=swupdate.service` + raw `reboot(2)` — inert for us; we ship our own
+unit around the same binary. `[wrynose]`
 | `WEBSERVER` / `MONGOOSE(SSL)`      | y         | y           | stage 1 delivery; `MONGOOSESSL` is web TLS only    |
 | `HW_COMPATIBILITY`                 | y         | y           | ⇒ `/etc/hwrevision` is **mandatory**               |
 | `SURICATTA` (+ `CURL`/`CURL_SSL`)  | n         | n (later)   | **this is the Hawkbit client**; `CURL*` are hidden |

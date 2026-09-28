@@ -1,0 +1,13 @@
+#!/bin/sh
+# Invoked by swupdate-progress via system() only after a SUCCESSful update
+# with images installed (solar-swupdate-progress.service -r hook).
+# Sole opt-out: /run/solar-update/no-reboot, planted by
+# 'solar-update -n|--no-reboot'. One-shot: consumed here, so a raw
+# 'swupdate -i' later in the same session reboots again as the signed
+# 'reboot = true' declaration intends. Busybox-ash safe.
+if [ -e /run/solar-update/no-reboot ]; then
+    rm -f /run/solar-update/no-reboot
+    echo "solar-swu-reboot: no-reboot marker consumed, staying up"
+    exit 0
+fi
+exec systemctl reboot

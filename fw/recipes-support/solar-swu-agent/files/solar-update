@@ -8,13 +8,15 @@
 # usage: solar-update [-n|--no-reboot] (-i <file.swu> | -d "-u https://host/fw.swu")
 #        [extra swupdate args forwarded verbatim, e.g. --allow-downgrades]
 # On success SWUpdate has already written slot=<x> (bootenv flush); the reboot
-# itself is systemd's orderly shutdown - the SWUpdate core never reboots and
-# the swupdate-progress helper would use a raw reboot(2) syscall instead.
+# is done by solar-swupdate-progress.service (swupdate-progress sees SUCCESS
+# on the progress socket and runs solar-swu-reboot -> systemctl reboot).
+# -n|--no-reboot just plants /run/solar-update/no-reboot, which that gate
+# script consumes instead of rebooting (one-shot, tmpfs: gone on next boot).
 set -e
 
-REBOOT=1
+NO_REBOOT=0
 if [ "$1" = "-n" ] || [ "$1" = "--no-reboot" ]; then
-    REBOOT=0
+    NO_REBOOT=1
     shift
 fi
 
@@ -37,6 +39,11 @@ esac
 # The raw handler needs the target files' parents to exist.
 mkdir -p /data/cores/slot-a /data/cores/slot-b
 
+# Reboot contract with solar-swu-reboot: default = reboot, fresh every run.
+mkdir -p /run/solar-update
+rm -f /run/solar-update/no-reboot
+[ "$NO_REBOOT" = "1" ] && : > /run/solar-update/no-reboot
+
 # The env write (bootenv flush) lands on p1, which is mounted ro by default:
 # libubootenv - the same target fw_setenv uses - cannot write it otherwise.
 # Hold /boot rw for the whole run (the flush happens inside swupdate).
@@ -50,13 +57,11 @@ if ! swupdate -e "stable,$SET" -k "$KEY" "$@"; then
 fi
 
 # Exit 0 implies SWUpdate already wrote slot=<x> (bootenv flush is part of
-# the install; its failure fails the update). Reboot via systemd so /data is
-# cleanly unmounted; sleep gives Ctrl-C (cancel = trap remounts /boot, no
-# reboot command is ever issued) a window on the serial console.
-if [ "$REBOOT" = "1" ]; then
-    echo "solar-update: installed and armed; rebooting in 5 s (Ctrl-C to keep running)"
-    sleep 5
-    systemctl reboot
-else
+# the install; its failure fails the update). The reboot is NOT issued here:
+# solar-swupdate-progress.service logs the whole install to journald and
+# reboots via systemd moments after SUCCESS (unless we planted the marker).
+if [ "$NO_REBOOT" = "1" ]; then
     echo "solar-update: installed and armed (--no-reboot). Reboot to switch."
+else
+    echo "solar-update: installed and armed; reboot follows via journald-logged progress service."
 fi

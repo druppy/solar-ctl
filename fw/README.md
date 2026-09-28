@@ -62,7 +62,7 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 | `recipes-core/images/solar-ctl-image.bb` | The image (U-Boot A/B layout, SWUpdate agent, RO root + `/etc` overlay)                       |
 | `recipes-core/images/solar-ctl-swu.bb`   | Single signed `.swu` (both slots as `stable,main`/`stable,alt` sets)                          |
 | `recipes-support/swupdate/`              | bbappend + kconfig fragment: minimal swupdate (signing on, web UI/lua/scripts off)            |
-| `recipes-support/solar-swu-agent/`       | On-target glue: `solar-update`, pub key, hwrevision, kernel-seed service                      |
+| `recipes-support/solar-swu-agent/`       | On-target glue: `solar-update`, pub key, hwrevision, kernel-seed + progress services          |
 | `recipes-bsp/u-boot/`                    | U-Boot ext4 fragment + pre-seeded `uboot.env` blob                                            |
 | `recipes-connectivity/solar-wifi/`       | WiFi bring-up: supplicant config + systemd units                                              |
 | `recipes-core/dropbear/`                 | bbappend: root-only key-only SSH config                                                       |
@@ -340,12 +340,16 @@ solar-update -n -i /path/to/solar-ctl-image.swu        # stage only, reboot manu
 
 `solar-update` derives the target from `root=` in `/proc/cmdline` (running on
 p2 → install set `alt`/slot-b and vice versa) and holds `/boot` rw long enough
-for the env write, then issues the systemd reboot (5 s Ctrl-C window; SWUpdate
-itself never reboots — its helper would use a raw `reboot(2)` syscall). The
+for the env write. The reboot is done by `solar-swupdate-progress.service`: it
+watches swupdate's progress socket, logs every update to journald, and on
+SUCCESS runs a gate script that calls `systemctl reboot` (SWUpdate itself never
+reboots). `-n|--no-reboot` plants a one-shot `/run/solar-update/no-reboot` the
+gate consumes instead of rebooting. The
 `.swu` is ONE file for both
 slots (libconfig sets, selected with `-e stable,main|alt`), signed RSA-4096 /
 SHA-256 and verified against `/etc/solar/swupdate.pub.pem`; SWUpdate runs
-on-demand only (its daemon units are stripped from the image).
+on-demand only (its daemon units are stripped from the image; the progress
+service is receive-only, nothing accepts update commands).
 
 **Signing keys** (same policy as WiFi creds — never committed):
 

@@ -193,12 +193,22 @@
   /proc/cmdline, mkdirs `/data/cores/slot-{a,b}`, holds /boot rw (trap
   remounts ro on EXIT) and forwards args to swupdate — both `-i f.swu` and
   `-d "-u https://..."` work (CONFIG_DOWNLOAD+DOWNLOAD_SSL now on; curl+TLS
-  in the image, nothing listens), plus `-n|--no-reboot` consumed locally before
-  forwarding. On success it issues `systemctl reboot` (5 s Ctrl-C window):
-  **swupdate itself never reboots** — verified in 2026.05.1: the sw-description
-  `reboot = true` only feeds progress/suricatta notifications, and the
-  `swupdate-progress`/`-ipc` helpers (not in our image) would do a raw
-  `reboot(RB_AUTOBOOT)` syscall, bypassing the clean unmount of rw /data. The
+  in the image, nothing listens); `-n|--no-reboot` only plants the one-shot
+  `/run/solar-update/no-reboot`. The reboot is done by **our
+  solar-swupdate-progress.service** (same recipe, `swupdate-progress` now in
+  the image): watches the progress socket, logs to journald, on SUCCESS runs
+  `/usr/libexec/solar-swu-reboot` (consumes the marker and stays up, else
+  `exec systemctl reboot` — never raw reboot(2)). Verified in 2026.05.1:
+  **swupdate itself never reboots** — sw-description `reboot = true` only
+  feeds progress/suricatta notifications; the progress server starts on EVERY
+  run (core/swupdate.c:1116 — watcher fires for CLI -i/-d too); `-w` blocks
+  silently until the socket exists; `-r` takes the NEXT WORD as its script
+  (run via system()); socket path follows $RUNTIME_DIRECTORY so the unit must
+  NOT set RuntimeDirectory= (both land on /tmp/swupdateprog); no CLI flag
+  suppresses reboot (-R = no-reinstall) — hence the /run marker. Upstream
+  swupdate-progress.service (in ${PN}-progress) stays inert (WantedBy=
+  swupdate.service, deleted) and would raw-reboot; our own unit wraps the
+  same binary. The
   `reboot = true` declaration stays in the signed description (stage-3
   SURICATTA consults it). The ARM is a per-set `bootenv = {name=
   "slot"; value="a|b"}` entry in sw-description: the parser resolves `bootenv`

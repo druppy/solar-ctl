@@ -135,11 +135,15 @@ IMAGE_INSTALL:append = " \
 # that ENABLE THEMSELVES by installation (CONFIG_SYSTEMD=y) - a daemon
 # listening on IPC/USB contradicts the on-demand flow and wastes RAM, so
 # the units (and their wants-symlinks) are deleted in postprocess below.
+# swupdate-progress: the one daemon we do run (unit ships with
+# solar-swu-agent): receive-only watcher of the progress socket - logs
+# every update to journald and reboots via systemd on SUCCESS.
 # solar-swu-agent: /etc/solar/swupdate.pub.pem, /etc/hwrevision,
 # /usr/bin/solar-update, first-boot kernel seed service.
 # e2fsck/mkfs.ext4: the /data self-heal in the overlayfs-etc preinit.
 IMAGE_INSTALL:append = " \
     swupdate \
+    swupdate-progress \
     solar-swu-agent \
     e2fsprogs-e2fsck \
     e2fsprogs-mke2fs \
