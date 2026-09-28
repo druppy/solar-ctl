@@ -265,11 +265,19 @@
   kernels shipped by OTA must stay compatible with the installed dtb.
 - **`uboot.env` must be shipped, libubootenv cannot create it** (bench
   2026-09-25). `fw/recipes-bsp/u-boot/solar-uboot-env_0.1.bb` deploys a
-  16384-byte blob = 4-byte LE CRC32 + `slot=a\0` + NUL pad (zlib.crc32 over
-  the remaining bytes; build-side crc re-verified, **libubootenv acceptance
-  on the bench still unverified**). Needs `inherit deploy` (that class owns
-  DEPLOYDIR; setting `do_deploy[dirs]="${DEPLOYDIR}"` by hand trips the
-  WORKDIR-pollution guard). Lands on p1 via `IMAGE_BOOT_FILES:append = "
+  16384-byte blob = 4-byte LE CRC32 + **full u-boot default env + `slot=a\0`**
+  + NUL pad (zlib.crc32 over the remaining bytes). **slot-only blobs are a
+  trap** (hit 2026-09-28 first bench boot of the factory image): U-Boot treats
+  a valid-CRC env as COMPLETE, so bootcmd/bootdelay vanish — autoboot and even
+  `boot` become silent no-ops; recovery is `env default -a` + `env save` from
+  the U-Boot prompt. The recipe therefore merges the deploy artifact
+  `u-boot-initial-env-<machine>-<pv>` (u-boot.inc deploys it as KEY=VALUE
+  text; `do_deploy[depends] += "virtual/bootloader:do_deploy"` is ORDERING
+  only — bitbake can't hash that file, so touch the recipe after a u-boot
+  bump). libubootenv acceptance of the blob format VERIFIED on bench
+  2026-09-28 (`fw_printenv slot` → `slot=a`). Needs `inherit deploy` (that
+  class owns DEPLOYDIR; setting `do_deploy[dirs]="${DEPLOYDIR}"` by hand trips
+  the WORKDIR-pollution guard). Lands on p1 via `IMAGE_BOOT_FILES:append = "
   uboot.env"` + `DEPENDS += solar-uboot-env`.
 - **/data (p4) self-heal in the overlayfs-etc preinit**: image ships its own
   `OVERLAYFS_ETC_INIT_TEMPLATE` (`files/solar-overlayfs-etc-preinit.sh.in`):
@@ -361,7 +369,12 @@
   **Choice trap (verified 2026-09-28, bootloader/Kconfig):** the `choice
   "Default Bootloader Interface"` has no `default` statement and UBOOT precedes
   NONE — `CONFIG_UBOOT=y` alone silently flips the default; pin
-  `CONFIG_BOOTLOADER_DEFAULT_UBOOT=y`. Related edge: if the on-disk env cannot
+  `CONFIG_BOOTLOADER_DEFAULT_UBOOT=y`. **Handler trap (bench 2026-09-28, first
+  solar-update run):** the `bootenv`/`uboot` IMAGE HANDLERS the parser resolves
+  are a SEPARATE switch — `CONFIG_BOOTLOADERHANDLER=y` (handlers/boot_handler.c,
+  default n); with only the backend built, every install dies in the parser:
+  "bootloader support absent but sw-description has bootloader section!". CI
+  asserts both. Related edge: if the on-disk env cannot
   be opened, `uboot.c` loads `UBOOT_DEFAULTENV` (/etc/u-boot-initial-env) and a
   later `env_store()` OVERWRITES uboot.env with it; that file is deliberately
   absent from our image so this path errors instead (libubootenv0 +

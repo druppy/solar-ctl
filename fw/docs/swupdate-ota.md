@@ -500,6 +500,11 @@ SWUpdate flushes via libubootenv (`/etc/fw_env.config` — the exact target
 every image of the set installed** (`core/installer.c` runs it after the
 install loop; its failure fails the update). `/usr/bin/solar-update` shrank to
 root=-detect + `/boot` rw window; scripts stay OUT (§6.5 reasoning holds).
+**Bench correction 2026-09-28:** the `bootenv` section also needs
+`CONFIG_BOOTLOADERHANDLER=y` (handlers/boot_handler.c registers the `bootenv`
+image type; `default n`, separate from the `CONFIG_UBOOT` *backend* above) —
+without it the parser rejects the signed description ("bootloader support
+absent…") and nothing installs. `[bench]`
 `DOWNLOAD`/`DOWNLOAD_SSL` are now **on** — fetch by URL, `solar-update -d
 "-u https://host/fw.swu"`; that is the only curl+TLS DEPENDS/RDEPENDS in the
 build and nothing listens (`WEBSERVER` still off; the device pulls). Edge: if

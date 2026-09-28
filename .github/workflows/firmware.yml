@@ -158,6 +158,7 @@ jobs:
             # default statement; see the fragment) and the URL download channel.
             grep -qx 'CONFIG_UBOOT=y' "$cfg" || { echo "::error::$cfg lost CONFIG_UBOOT (slot arm via bootenv!)"; fail=1; }
             grep -qx 'CONFIG_BOOTLOADER_DEFAULT_UBOOT=y' "$cfg" || { echo "::error::$cfg lost CONFIG_BOOTLOADER_DEFAULT_UBOOT (choice silently flipped?)"; fail=1; }
+            grep -qx 'CONFIG_BOOTLOADERHANDLER=y' "$cfg" || { echo "::error::$cfg lost CONFIG_BOOTLOADERHANDLER (bootenv image handler missing - parser rejects the .swu!)"; fail=1; }
             grep -qx 'CONFIG_DOWNLOAD=y' "$cfg" || { echo "::error::$cfg lost CONFIG_DOWNLOAD (-u fetch)"; fail=1; }
             grep -qx 'CONFIG_DOWNLOAD_SSL=y' "$cfg" || { echo "::error::$cfg lost CONFIG_DOWNLOAD_SSL (https fetch)"; fail=1; }
             for off in CONFIG_MTD CONFIG_WEBSERVER CONFIG_LUA CONFIG_SCRIPTS CONFIG_SURICATTA; do
