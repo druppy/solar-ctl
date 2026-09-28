@@ -159,6 +159,16 @@ solar_ab_create_data_dir() {
     mkdir -p ${IMAGE_ROOTFS}/data
 }
 
+# Persistent journal: /var/log becomes a symlink into /data (ext4, mounted
+# by the preinit before systemd starts), so journald runs off RAM-tight
+# tmpfs and logs survive reboots. Storage=/SystemMaxUse come from the
+# journald drop-in shipped by solar-swu-agent.
+ROOTFS_POSTPROCESS_COMMAND:append = " solar_ab_persist_var_log;"
+solar_ab_persist_var_log() {
+    rm -rf ${IMAGE_ROOTFS}/var/log
+    ln -sfn /data/log ${IMAGE_ROOTFS}/var/log
+}
+
 # Our preinit = upstream template + p4 self-heal (e2fsck -y, then reformat
 # as last resort: a corrupted /data must never block the boot). The class
 # tracks this file in do_rootfs[file-checksums], so editing it re-runs

@@ -53,6 +53,9 @@ done
 if [ "$DATA_MOUNTED" = "1" ]; then
     mkdir -p $UPPER_DIR
     mkdir -p $WORK_DIR
+    # /var/log is a symlink to /data/log (persistent journald); create the
+    # target before PID 1 so journald never sees a dangling link.
+    mkdir -p {OVERLAYFS_ETC_MOUNT_POINT}/log
 
     if {OVERLAYFS_ETC_EXPOSE_LOWER}; then
         mkdir -p $LOWER_DIR

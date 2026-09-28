@@ -19,6 +19,7 @@ SRC_URI = " \
     file://solar-swupdate-progress.service \
     file://solar-swu-reboot \
     file://boot.mount \
+    file://journald-persistent.conf \
     file://hwrevision \
 "
 
@@ -41,6 +42,9 @@ do_install() {
     install -m 0644 ${S}/solar-cores-seed.service ${D}${systemd_system_unitdir}/
     install -m 0644 ${S}/solar-swupdate-progress.service ${D}${systemd_system_unitdir}/
     install -m 0644 ${S}/boot.mount ${D}${systemd_system_unitdir}/
+    install -d ${D}${sysconfdir}/systemd/journald.conf.d
+    install -m 0644 ${S}/journald-persistent.conf \
+        ${D}${sysconfdir}/systemd/journald.conf.d/10-solar-ctl.conf
     install -m 0644 ${S}/hwrevision ${D}${sysconfdir}/hwrevision
     install -m 0644 ${WORKDIR}/swu-signing/public.pem \
         ${D}${sysconfdir}/solar/swupdate.pub.pem

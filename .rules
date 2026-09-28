@@ -306,9 +306,17 @@
   QA; the dir already exists in the base rootfs). Overlay trap while
   debugging: writing a file directly into the /etc overlay UPPER
   (`/data/overlay-etc/upper/...`) does not appear through the mounted /etc
-  (cached dentry) — write THROUGH /etc instead. Journald is VOLATILE (no
-  persistent journal): progress-service logs die at reboot, so for
-  auto-rebooting updates the live serial capture is the evidence.
+  (cached dentry) — write THROUGH /etc instead.
+- **Journal persists on /data** (bench-verified 2026-09-28): `/var/log` is a
+  symlink to `/data/log` (image postprocess `solar_ab_persist_var_log`), the
+  preinit `mkdir -p /data/log` before PID 1, and solar-swu-agent ships
+  `/etc/systemd/journald.conf.d/10-solar-ctl.conf` (`Storage=persistent`,
+  `SystemMaxUse=32M` + `SystemMaxFileSize=8M` — the caps are the SD-wear
+  bound; lower them for long-term production). Keeps the journal off the
+  512 MB tmpfs and alive across reboots: after an OTA flip,
+  `journalctl -b -1 -u solar-swupdate-progress` shows the *previous* boot's
+  update (bench: boots -1/0 listed). Preinit-failure note: if /data never
+  mounts, the link is dangling and journald falls back to /run.
 - **/data (p4) self-heal in the overlayfs-etc preinit**: image ships its own
   `OVERLAYFS_ETC_INIT_TEMPLATE` (`files/solar-overlayfs-etc-preinit.sh.in`):
   mount → e2fsck -y → mkfs.ext4 -F last resort; boot never blocks. **Trap:**
