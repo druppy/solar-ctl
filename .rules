@@ -69,7 +69,9 @@
   `ERROR: No recipes in default available for: .../swupdate_%.bbappend`, even
   though nothing in the image references swupdate. Every layer is parsed by
   every build. Fix = put such recipes in a layer that only the kas config
-  needing them adds (`fw-swupdate/`), not in `fw/`.
+  needing them adds (a separate layer), not in `fw/`. (This was the whole
+  point of the old `fw-swupdate/` gate layer — retired 2026-09-28 now that
+  `fw/kas-rpi0.yml` itself adds meta-swupdate.)
 - In kas, `repos.<id>.layers` is a **mapping** (layer path -> null | disabled
   | {prio}), so an including config that adds a key ADDS a layer while the rest
   of the parent entry survives; `target:` on the other hand is a list and gets
@@ -152,29 +154,82 @@
 - `build/tmp/work-shared/raspberrypi0-wifi/kernel-source` survives rm_work
   — grep defconfigs/board DTS/overlays there instead of unpacking anything.
 
-## A/B OTA / SWUpdate (in design — full record in fw/docs/swupdate-ota.md)
+## A/B OTA / SWUpdate (IMPLEMENTED in-tree — full record in fw/docs/swupdate-ota.md)
 - Target: A/B **squashfs-xz** read-only roots + `/etc` overlay + ext4 `/data`;
-  slot switch by **RPi firmware** (no U-Boot). Design only, nothing in an image.
-- **Compile gate exists** (2026-09-23): `fw/kas-swupdate.yml` (`includes:
-  fw/kas-rpi0.yml`, `target: [swupdate]`) + the **`fw-swupdate` layer**
-  (bbappend + kconfig fragment) + a **parallel `swupdate` CI job** that builds
-  only the recipe — musl was the open question, so the image build in
-  `fw/kas-rpi0.yml` is deliberately untouched and `swupdate` is NOT in
-  `IMAGE_INSTALL`. That job restores the sstate cache but must **never save it**
-  (10 GB/repo quota; the image job already spends ~1.3 GB per generation), and
-  it asserts the merged kconfig. That config is snapshotted by our bbappend to
-  `${T}/swupdate-merged-dotconfig` (`rm_work` never deletes `temp`); note
-  `${WORKDIR}/.config` is only the *input* merge and still shows the symbols the
-  fragment removed, so it is not evidence of anything.
-- **The gate PASSED** (2026-09-23, run 35926622985): `swupdate_2026.05.1.bb`
-  builds on **musl** — DEPENDS came from oe-core (`lua_5.5.0`,
-  `libconfig_1.8.2`, `json-c_0.18`, `libubootenv_0.3.7`) — and the merged config
-  kept `SIGNED_IMAGES`/`HASH_VERIFY`/`BOOTLOADER_NONE`/`SYSTEMD` = y with
-  `UBOOT`/`MTD`/`SURICATTA` off. The toolchain is no longer the unknown; the
-  bench tests are.
-- The bbappend lives in its **own layer** `fw-swupdate/`, added only by
-  `fw/kas-swupdate.yml` — see the dangling-bbappend gotcha above. Move it back
-  into `fw/` when SWUpdate actually enters the image.
+  slot switch via **U-Boot env `slot=a|b`** (plan of record since 2026-09-25,
+  bench test 5 PASS). Milestone image validated on bench; signed OTA flow
+  implemented 2026-09-28 (bench validation of the update path still pending).
+- **Gate retired** (2026-09-28): `fw/kas-swupdate.yml`, the `fw-swupdate`
+  layer and the parallel CI `swupdate` job are deleted. The bbappend + kconfig
+  fragment now live in `fw/recipes-support/swupdate/` and are only legal there
+  because `fw/kas-rpi0.yml` adds the meta-swupdate repo (dangling-bbappend
+  gotcha). swupdate IS in `IMAGE_INSTALL` (on-demand CLI; its auto-enabled
+  `.service`/`.socket` are deleted by an image postprocess fn).
+  Merged-kconfig asserts (SIGNED_IMAGES/SIGALG_RAWRSA/HASH_VERIFY=y;
+  UBOOT/MTD/WEBSERVER/LUA/SCRIPTS/DOWNLOAD/SURICATTA not =y) moved into the
+  main firmware CI job, reading the `${T}/swupdate-merged-dotconfig` snapshot
+  the bbappend still writes (`rm_work` never deletes `temp`).
+- **Signing: RSA-4096, PKCS#1 v1.5, SHA-256 — ed25519 is impossible**
+  (verified against swupdate 2026.05.1 sources + U-Boot FIT: SWUpdate streams
+  `EVP_DigestVerifyUpdate/Final`, OpenSSL ed25519 is one-shot only, `openssl
+  dgst -sign` refuses ed25519, FIT has no ed25519; same keypair is planned to
+  sign FIT images later, which settles it). Keys env-style like WiFi:
+  `SOLAR_SWU_PRIVATE_KEY`/`SOLAR_SWU_PUBLIC_KEY` = PEM **content** or
+  **absolute host path** (declared in kas `env:`); empty ⇒ committed
+  throwaway dev key `fw/files/keys/dev/` + loud bb.warn (keeps CI green).
+  Real keys: `fw/tools/swu-keygen.sh` → `.zed/tasks.json` env / Actions
+  secrets `SOLAR_SWU_*`. Plumbing: `fw/classes/solar-swu-signing.bbclass`
+  (writes `${WORKDIR}/swu-signing/{private,public}.pem` in a task wired via
+  `bb.build.addtask` inside anon-python — plain `addtask ... before
+  do_swuimage` breaks recipes lacking that task, and setting a `before`
+  *flag* by hand does nothing; `do_swuimage[vardeps]`/`do_install[vardeps]`
+  so key rotation re-runs tasks).
+- **Single .swu, two sets** (`fw/recipes-core/images/solar-ctl-swu.bb` +
+  `files/sw-description`): `stable = { main = p2 + /data/cores/slot-a/uImage;
+  alt = p3 + slot-b }`, chosen at install: `swupdate -i f.swu -e
+  stable,main|alt -k /etc/solar/swupdate.pub.pem`. `/usr/bin/solar-update`
+  (recipe `solar-swu-agent`) derives the set from `root=` in /proc/cmdline,
+  mkdirs `/data/cores/slot-{a,b}`, runs swupdate, then arms with rw-remount
+  /boot + `fw_setenv slot`. NO scripts in the .swu (LUA/SCRIPTS/SHELLHANDLER
+  compiled out — pure-data payload, smaller binary, liblua dropped);
+  hardware-compatibility against `/etc/hwrevision` (=1.0) is LIVE once
+  swupdate ships. Recipe facts: NOT an image recipe — `inherit
+  swupdate-common solar-swu-signing image-artifact-names` (without the last,
+  IMAGE_NAME/IMAGE_LINK_NAME are unset → dashed filenames), `S = "${UNPACKDIR}"`
+  comes from the class, full entry names in `SWUPDATE_IMAGES` are matched
+  EXACTLY in DEPLOY_DIR_IMAGE (use stable symlinks), `IMAGE_DEPENDS =
+  "solar-ctl-image"`, squashfs payload via `IMAGE_FSTYPES += "squashfs-xz"`.
+  **Artifact name has a `.rootfs` infix**: `solar-ctl-swu-raspberrypi0-wifi.rootfs.swu`.
+- **sw-description gotchas** (verified by building it): libconfig comments
+  must be `/* */`; the `$fn(...)`/`@@VAR@@` expansion regex scans **every
+  line including comments** — mentioning `$swupdate_get_sha256(...)` in a
+  comment makes do_swuimage try to hash a file named `...`; sha256 values
+  belong in `properties` and expand at build time from files staged in
+  WORKDIR by the class itself.
+- **Kernel/dtb off p1** (user decision 2026-09-28): per-slot kernels are
+  regular files on ext4 `/data`; boot.scr does `ext4load mmc 0:4
+  ${kernel_addr_r} /cores/slot-${slot}/uImage` (p**4**! not 0:3), falls back
+  to the top-level FAT uImage (factory card before the seed runs).
+  `solar-cores-seed.service` (solar-swu-agent) copies /boot/uImage →
+  slot-a on first boot. U-Boot needs `CONFIG_CMD_EXT4`/`CONFIG_FS_EXT4` via
+  `fw/recipes-bsp/u-boot/u-boot_%.bbappend` + files/solar-ctl.cfg
+  (`u-boot-configure.inc` merges every SRC_URI `*.cfg`). **NO dtb in the
+  .swu**: boot uses the p1 DTB+overlays loaded by start.elf (never OTA'd) →
+  kernels shipped by OTA must stay compatible with the installed dtb.
+- **`uboot.env` must be shipped, libubootenv cannot create it** (bench
+  2026-09-25). `fw/recipes-bsp/u-boot/solar-uboot-env_0.1.bb` deploys a
+  16384-byte blob = 4-byte LE CRC32 + `slot=a\0` + NUL pad (zlib.crc32 over
+  the remaining bytes; build-side crc re-verified, **libubootenv acceptance
+  on the bench still unverified**). Needs `inherit deploy` (that class owns
+  DEPLOYDIR; setting `do_deploy[dirs]="${DEPLOYDIR}"` by hand trips the
+  WORKDIR-pollution guard). Lands on p1 via `IMAGE_BOOT_FILES:append = "
+  uboot.env"` + `DEPENDS += solar-uboot-env`.
+- **/data (p4) self-heal in the overlayfs-etc preinit**: image ships its own
+  `OVERLAYFS_ETC_INIT_TEMPLATE` (`files/solar-overlayfs-etc-preinit.sh.in`):
+  mount → e2fsck -y → mkfs.ext4 -F last resort; boot never blocks. **Trap:**
+  the class renders the template with python `str.format()` — any literal
+  `{`/`}` (even in comments, and shell-function braces) breaks do_rootfs;
+  the upstream template is brace-free for exactly this reason.
 - **SWUpdate update state is a trap with `BOOTLOADER_NONE`**: the "Update Status
   Storage" choice has exactly ONE option (`UPDATE_STATE_CHOICE_BOOTLOADER`,
   which `depends on ... || BOOTLOADER_NONE || ...`), so it is force-enabled and
@@ -219,7 +274,7 @@
   **any `*.cfg` in SRC_URI is a config fragment** — do_configure concatenates
   flags + `defconfig` + `find_cfgs()` (every SRC_URI `*.cfg`) then
   `merge_config.sh -m` (last wins) + `olddefconfig`. Ours:
-  `fw-swupdate/recipes-support/swupdate/swupdate/solar-ctl.cfg`.
+  `fw/recipes-support/swupdate/swupdate/solar-ctl.cfg`.
   DEPENDS are computed from the **merged** config text, and the fragment regex
   accepts `# CONFIG_FOO is not set`, so that form really removes a base `y` and
   its DEPENDS. Trap: `HAVE_*` are `option env=` symbols probed from the sysroot
@@ -227,8 +282,9 @@
   an unmet `depends on HAVE_*` — never trust "the fragment was applied", read
   the merged `.config` (CI dumps it). `CURL`/`CURL_SSL` are **hidden** (only via
   `SURICATTA`/`DOWNLOAD*`). `libubootenv`/`libconfig`/`json-c` are unconditional
-  DEPENDS. Shipped defconfig is wrong for us: `CONFIG_UBOOT=y` (we have no
-  U-Boot), `SURICATTA`/`CURL`/`SIGNED_IMAGES`/`HASH_VERIFY` all off. Hawkbit =
+  DEPENDS. Shipped defconfig is wrong for us: `CONFIG_UBOOT=y` (swupdate must
+  not touch the U-Boot env — fw_setenv owns it), `SURICATTA`/`CURL`/
+  `SIGNED_IMAGES`/`HASH_VERIFY` all off. Hawkbit =
   just `CONFIG_SURICATTA=y` (+CURL_SSL) — a config, not a protocol to implement.
   No RPi bootloader handler exists (`none/ebg/uboot/grub/cboot` only; and
   `BOOTLOADER_NONE` is `default y`) → set
@@ -239,8 +295,11 @@
   packages of `swupdate`. The layer also ships **bbclasses** —
   `swupdate-image.bbclass` (`.swu` straight from an image recipe +
   `file://sw-description`) on `swupdate-common.bbclass` (`do_swuimage`,
-  `SWUPDATE_IMAGES*`, `SWUPDATE_SIGNING` ⇒ `cpio-native`/`openssl-native`) — the
-  likely route for building the actual artifacts (signing at build time).
+  `SWUPDATE_IMAGES*`, `SWUPDATE_SIGNING` ⇒ `cpio-native`/`openssl-native`,
+  `S = "${UNPACKDIR}"`, signs with `openssl dgst -sha256 -sign`, requires
+  `SWUPDATE_PRIVATE_KEY` to EXIST at task time) — this IS the route used
+  since 2026-09-28 (via solar-ctl-swu.bb; swupdate-image.bbclass itself is
+  NOT inherited — it injects its own image).
 - **`wic` moved OUT of oe-core** (verified 2026-09-23: no `scripts/lib/wic`
   on wrynose or master). It is a standalone project consumed as a recipe:
   `meta/recipes-support/wic/wic_0.3.1.bb` → `git://git.yoctoproject.org/wic.git`

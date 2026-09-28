@@ -1,7 +1,9 @@
 # A/B OTA updates for solar-ctl (SWUpdate)
 
-**Status: design record + musl compile gate PASSED + bench tests 0–4 DONE.**
-Nothing A/B in an image yet. Plan of record: **per-slot kernel via U-Boot
+**Status: design record + compile gate PASSED + bench tests 0–5 DONE (test 5
+PASS 2026-09-25: U-Boot A/B milestone image validated end-to-end) + signed
+single-file `.swu` flow IMPLEMENTED in-tree (2026-09-28, pending bench).**
+Plan of record: **per-slot kernel via U-Boot
 (Tier 3)** — one slot = one kernel + modules + root (§5). Branch
 `swupdate_setup`. SWUpdate builds on musl (`[ci]` run 35926622985).
 This file is the research + design record so the next session does not have
@@ -28,9 +30,12 @@ fail-safe OTA scheme:
 - two **read-only** root slots (A/B), contents shipped as **squashfs (xz)**
 - **`/etc` writable** as an overlay (factory-reset-able, survives slot switch)
 - a **`data`** partition (ext4, journalled) for the app's persistent state
-- **SWUpdate** as the update agent; slot selection done by the **Raspberry Pi
-  firmware** (there is no U-Boot on this machine and we are not adding one)
-- delivery via the **SWUpdate web UI** first, **Eclipse Hawkbit** later
+- **SWUpdate** as the update agent; slot selection originally conceived as
+  Raspberry Pi firmware `tryboot` — superseded 2026-09-25 by **U-Boot env**
+  (`slot=a|b`), see §5/§6.6
+- delivery: originally "web UI first, **Eclipse Hawkbit** later" — superseded
+  2026-09-28 by the **signed CLI flow** (`solar-update file.swu`, web UI
+  compiled out), see §6.4
 
 Hard constraints from the hardware: **BCM2835, 512 MB RAM, no RTC, SD-card
 mass storage, one FAT boot partition that the GPU firmware must read.**
@@ -470,6 +475,17 @@ worth-worrying-about unknown.
 | `SHELLSCRIPTHANDLER`               | y         | y           | cheap fallback for the same job                    |
 | `SCRIPTS`                          | y         | y           |                                                    |
 | `RAW`                              | y         | y           | writes `device=` literally                         |
+
+`[implemented 2026-09-28]` SWUpdate entered the image with a **smaller**
+config than this gate table: `LUA`/`LUASCRIPTHANDLER`/`SHELLSCRIPTHANDLER`/
+`SCRIPTS`/`WEBSERVER`/`MONGOOSE`/`DOWNLOAD` are now all **off** — the `.swu`
+is pure data and the slot switch is `fw_setenv` from the rootfs wrapper
+(`/usr/bin/solar-update`), so the "keep (scripts)" rows above are void (and
+liblua left DEPENDS with them). The compile gate itself is retired: the
+`swupdate` CI job and the `fw-swupdate/` gate layer are gone, the bbappend +
+fragment live in `fw/recipes-support/swupdate/` (kas-rpi0.yml now adds
+meta-swupdate, so the dangling-bbappend rule is satisfied), and the merged
+kconfig asserts moved into the main firmware job.
 | `WEBSERVER` / `MONGOOSE(SSL)`      | y         | y           | stage 1 delivery; `MONGOOSESSL` is web TLS only    |
 | `HW_COMPATIBILITY`                 | y         | y           | ⇒ `/etc/hwrevision` is **mandatory**               |
 | `SURICATTA` (+ `CURL`/`CURL_SSL`)  | n         | n (later)   | **this is the Hawkbit client**; `CURL*` are hidden |
@@ -512,21 +528,37 @@ worth-worrying-about unknown.
 - `install-if-hash-different` exists — use it to make re-applying the same
   image a no-op.
 - `swupdate.service` + `swupdate.socket` are enabled by *mere installation*;
-  IPC at `/tmp/sockinstctrl` + `/tmp/swupdateprog`. Decide whether the daemon
-  runs always or socket-activated on demand.
+  IPC at `/tmp/sockinstctrl` + `/tmp/swupdateprog`. **[decided 2026-09-28]**
+  neither: `solar-ctl-image.bb` postprocess deletes both units and their
+  wants-symlinks — updates are strictly on-demand via `solar-update`.
 
 ### 6.4 Signing — gate, not a nice-to-have
 
-This repo is public and the web UI binds a TCP port. An unsigned OTA endpoint
-is remote root. Before the web UI is reachable from any network:
-`CONFIG_SIGNED_IMAGES=y` + `CONFIG_HASH_VERIFY=y`, `swupdate-privkey.pem` kept
-off-repo, `--setkey`/`-k <pubkey.pem>` baked into the image, and the
-`sha256.hash` + `signature.asn1` checked on every install.
+This repo is public and an unsigned OTA endpoint is remote root. **[implemented
+2026-09-28]** the web UI is compiled OUT entirely (`WEBSERVER`/`MONGOOSE` off,
+so nothing listens); delivery is a signed file plus the on-demand CLI:
+`swupdate -i f.swu -e stable,<set> -k /etc/solar/swupdate.pub.pem`, wrapped by
+`/usr/bin/solar-update` (derives the set from `root=` in `/proc/cmdline`, arms
+the switch afterwards). One `.swu` carries BOTH slots as libconfig sets
+(`main` → p2 + `/data/cores/slot-a/uImage`, `alt` → p3 + slot-b).
+Algorithm: **RSA-4096, PKCS#1 v1.5, SHA-256** (`CONFIG_SIGALG_RAWRSA`, CI-
+asserted). ed25519 is impossible on both ends: SWUpdate streams
+`EVP_DigestVerifyUpdate/Final` (OpenSSL ed25519 is one-shot only, `openssl
+dgst -sign` refuses it) and U-Boot FIT has no ed25519 — which matters because
+the SAME keypair is planned for FIT verified boot later. `[master] [bench-pending]`
+
+Key plumbing mirrors the WiFi policy (`fw/classes/solar-swu-signing.bbclass`):
+`SOLAR_SWU_PRIVATE_KEY`/`SOLAR_SWU_PUBLIC_KEY` env values are PEM **content**
+or an **absolute host path**; empty falls back to the committed throwaway dev
+key with a loud warning. Public key + `/etc/hwrevision` are shipped by
+`solar-swu-agent`; `hardware-compatibility = ["1.0"]` in sw-description makes
+the check live.
 
 The compile gate confirms the SSL side is not probed away: the merged config
 keeps `CONFIG_SSL_IMPL_OPENSSL=y` (GPGME/mbedTLS/WOLFSSL off) alongside
 `CONFIG_SIGNED_IMAGES=y` + `CONFIG_HASH_VERIFY=y`, so the `HAVE_LIBSSL`-style
-drop hazard did **not** bite here. `[ci]`
+drop hazard did **not** bite here. `[ci]` (re-asserted per image build since
+2026-09-28, now including `CONFIG_SIGALG_RAWRSA=y`)
 
 ### 6.5 Rollback without a boot counter
 

@@ -1,0 +1,14 @@
+#!/bin/sh
+# First boot: seed /data/cores/slot-a/uImage from the p1 fallback kernel so
+# boot.scr's ext4load path has a target on a factory card (slot a runs the
+# same kernel/rootfs pair the kickstart shipped). Idempotent; after the
+# first solar-update, the SWUpdate-written file simply stays.
+set -e
+
+mkdir -p /data/cores/slot-a /data/cores/slot-b
+
+if [ ! -f /data/cores/slot-a/uImage ]; then
+    cp /boot/uImage /data/cores/slot-a/uImage
+    sync
+    echo "solar-cores-seed: seeded /data/cores/slot-a/uImage"
+fi

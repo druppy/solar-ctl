@@ -13,6 +13,7 @@ machine: raspberrypi0-wifi
 
 target:
   - solar-ctl-image
+  - solar-ctl-swu
 
 # WiFi credentials for the solar-wifi recipe (wpa_supplicant-wlan0.conf +
 # units). Declaring them here makes kas export them to bitbake (via
@@ -31,6 +32,16 @@ env:
   SOLAR_WIFI_PSK: CHANGEME
   # WiFi regulatory domain (allowed channels), ISO 3166-1 alpha-2.
   SOLAR_WIFI_COUNTRY: GB
+  # .swu signing keypair (RSA-4096, fw/tools/swu-keygen.sh; class
+  # fw/classes/solar-swu-signing.bbclass). Each value is either the PEM
+  # CONTENT (starts with '-----BEGIN') or an ABSOLUTE host path. Empty
+  # signs with the committed throwaway dev key + a loud bb.warn - fine for
+  # CI/fresh clones, never for a release. Same keypair will later verify
+  # U-Boot FIT images, hence RSA and not ed25519. REAL KEYS: only in
+  # .zed/tasks.json env / Actions secrets (secrets.SOLAR_SWU_*), never in
+  # git (repo is PUBLIC).
+  SOLAR_SWU_PRIVATE_KEY: ""
+  SOLAR_SWU_PUBLIC_KEY: ""
 
 repos:
   # Pull in the pinned repo definitions (oe-core, bitbake,
@@ -73,6 +84,15 @@ repos:
     layers:
       # only what we need from meta-OE (mbpoll/libmodbus for bus bring-up)
       meta-oe:
+  meta-swupdate:
+    # GitHub mirror (git.yoctoproject.org 403s here). Layer sits at the repo
+    # root (conf/layer.conf), hence no `layers:` key - like meta-raspberrypi.
+    # REQUIRED by every build: fw/ now carries swupdate_%.bbappend, and a
+    # dangling bbappend is a hard error on wrynose (.rules gotcha) - do not
+    # remove this repo without moving that bbappend back out of fw/.
+    url: https://github.com/sbabic/meta-swupdate
+    branch: wrynose
+    path: layers/meta-swupdate
 
 local_conf_header:
   solar-ctl: |

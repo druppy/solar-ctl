@@ -1,0 +1,79 @@
+/* solar-ctl single-file A/B update (doc swupdate-ota.md §6).
+ *
+ * ONE .swu, two libconfig SETS: the artifact is slot-agnostic, the set is
+ * chosen at install time (-e stable,main | -e stable,alt) by
+ * /usr/bin/solar-update, which derives it from root= in /proc/cmdline:
+ *   running on p2 (slot a) -> install set "alt"  (target p3 + slot-b)
+ *   running on p3 (slot b) -> install set "main" (target p2 + slot-a)
+ *
+ * No scripts/handlers in the .swu on purpose: SWUpdate is built with
+ * SCRIPTS/LUA/SHELLSCRIPTHANDLER off (smallest possible binary), so the
+ * .swu is pure data. The slot switch (fw_setenv) happens in the rootfs
+ * wrapper AFTER swupdate exits 0.
+ *
+ * hardware-compatibility is checked against /etc/hwrevision (solar-swu-agent).
+ * installed-directly=true is MANDATORY on 512 MB: otherwise SWUpdate first
+ * unpacks the payload into tmpfs /tmp.
+ * C-style comments only: libconfig grammar.
+ * The sha256 values below use the swupdate_get_sha256() macro, expanded by
+ * swupdate-common.bbclass at build time (NEVER mention that macro with a
+ * leading dollar sign in a comment: the expansion regex scans every line,
+ * including comments).
+ */
+
+software =
+{
+	version = "1.0";
+	hardware-compatibility = [ "1.0" ];
+
+	stable =
+	{
+		main =
+		{
+			images = (
+			{
+				filename = "solar-ctl-image-raspberrypi0-wifi.rootfs.squashfs-xz";
+				device = "/dev/mmcblk0p2";
+				type = "raw";
+				properties = {
+					installed-directly = true;
+					sha256 = "$swupdate_get_sha256(solar-ctl-image-raspberrypi0-wifi.rootfs.squashfs-xz)";
+				};
+			},
+			{
+				filename = "uImage";
+				device = "/data/cores/slot-a/uImage";
+				type = "raw";
+				properties = {
+					installed-directly = true;
+					sha256 = "$swupdate_get_sha256(uImage)";
+				};
+			}
+			);
+		};
+
+		alt =
+		{
+			images = (
+			{
+				filename = "solar-ctl-image-raspberrypi0-wifi.rootfs.squashfs-xz";
+				device = "/dev/mmcblk0p3";
+				type = "raw";
+				properties = {
+					installed-directly = true;
+					sha256 = "$swupdate_get_sha256(solar-ctl-image-raspberrypi0-wifi.rootfs.squashfs-xz)";
+				};
+			},
+			{
+				filename = "uImage";
+				device = "/data/cores/slot-b/uImage";
+				type = "raw";
+				properties = {
+					installed-directly = true;
+					sha256 = "$swupdate_get_sha256(uImage)";
+				};
+			}
+			);
+		};
+	};
+};

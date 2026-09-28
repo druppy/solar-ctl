@@ -5,3 +5,6 @@ layers/
 # throwaway CI/local wifi fragment (kas wifi override from secrets)
 .kas-wifi-ci.yml
 .kas-wifi-local.yml
+# output of fw/tools/swu-keygen.sh — real signing keys are NEVER committed
+# (the dev fallback pair under fw/files/keys/dev/ is throwaway by design)
+swu-keys/

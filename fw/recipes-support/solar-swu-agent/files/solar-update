@@ -1,0 +1,40 @@
+#!/bin/sh
+# Install a signed .swu into the INACTIVE slot and arm it. Busybox-ash safe.
+# The .swu carries both targets as sets (sw-description); we pick the set
+# that is NOT us, install, then arm the switch with fw_setenv slot=<x>.
+# Doc: fw/docs/swupdate-ota.md §6.
+set -e
+
+SWU="$1"
+if [ -z "$SWU" ] || [ ! -f "$SWU" ]; then
+    echo "usage: solar-update <file.swu>" >&2
+    exit 2
+fi
+
+KEY=/etc/solar/swupdate.pub.pem
+[ -f "$KEY" ] || { echo "solar-update: missing $KEY" >&2; exit 1; }
+
+ROOTPART=$(sed -n 's|.*root=/dev/mmcblk0p\([0-9]\{1,2\}\).*|\1|p' /proc/cmdline)
+case "$ROOTPART" in
+    2) SET=alt;  SLOT=b ;;
+    3) SET=main; SLOT=a ;;
+    *) echo "solar-update: unexpected root= partition '$ROOTPART' (not p2/p3?)" >&2
+       exit 1 ;;
+esac
+
+# The raw handler needs the target files' parents to exist.
+mkdir -p /data/cores/slot-a /data/cores/slot-b
+
+echo "solar-update: installing set '$SET' (slot $SLOT) from $SWU"
+if ! swupdate -i "$SWU" -e "stable,$SET" -k "$KEY"; then
+    echo "solar-update: swupdate FAILED - slot $SLOT not armed" >&2
+    exit 1
+fi
+
+# Arm the switch: one deliberate FAT write on p1 (ro by default).
+mount -o remount,rw /boot
+fw_setenv slot "$SLOT"
+sync
+mount -o remount,ro /boot
+
+echo "solar-update: slot $SLOT installed and armed. Reboot to switch."
