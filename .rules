@@ -184,7 +184,20 @@
   `bb.build.addtask` inside anon-python — plain `addtask ... before
   do_swuimage` breaks recipes lacking that task, and setting a `before`
   *flag* by hand does nothing; `do_swuimage[vardeps]`/`do_install[vardeps]`
-  so key rotation re-runs tasks).
+  so key rotation re-runs tasks). **vardeps must also be on
+  `do_swu_signing_keys` itself** (hit 2026-09-28 when first real keys went
+  into `.zed/tasks.json`): that task reads the vars via a string-literal
+  variable NAME (`solar_swu_get_key(d, "SOLAR_SWU_...")`), invisible to
+  vartable analysis, so without its own vardeps it replays STALE staged PEMs
+  while `do_swuimage` (vardeps on the var) re-runs and silently re-signs
+  with the old keypair → dev-signed `.swu` vs real-key image, `openssl
+  dgst` verification failure; the tell is the staged
+  `solar-ctl-swu/1.0/swu-signing/*.pem` mtimes lagging the build. Debug
+  recipe (hashes only, never print PEMs): sha256 the key baked in the
+  `solar-swu-agent` RPM (`./etc/solar/swupdate.pub.pem`), the
+  `swu-keys/public.pem`, and `.zed/tasks.json` values (JSON-escaped `\n`
+  must be unescaped; `$ZED_WORKTREE_ROOT` must be expanded — Zed does this
+  itself, `.zed/env-inject.py` does it for terminal builds).
 - **Single .swu, two sets** (`fw/recipes-core/images/solar-ctl-swu.bb` +
   `files/sw-description`): `stable = { main = p2 + /data/cores/slot-a/uImage;
   alt = p3 + slot-b }`, chosen at install: `swupdate -i f.swu -e

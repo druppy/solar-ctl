@@ -86,5 +86,12 @@ python () {
 
 # The tasks above consume the env vars, but bitbake only re-runs tasks whose
 # inputs changed - without vardeps, swapping keys would reuse stale sstate.
+# do_swu_signing_keys needs it too: it reads the vars through a string-literal
+# variable NAME (solar_swu_get_key(d, "SOLAR_SWU_...")), which vartable static
+# analysis cannot see - without this vardeps a key rotation re-runs
+# do_swuimage (vardeps below) but replays the STALE staged key here, silently
+# re-signing with the old keypair while the image bakes the new one (hit
+# 2026-09-28: dev-signed .swu vs real-key image, signature verify failure).
+do_swu_signing_keys[vardeps] += "SOLAR_SWU_PRIVATE_KEY SOLAR_SWU_PUBLIC_KEY"
 do_swuimage[vardeps] += "SOLAR_SWU_PRIVATE_KEY"
 do_install[vardeps] += "SOLAR_SWU_PUBLIC_KEY"
