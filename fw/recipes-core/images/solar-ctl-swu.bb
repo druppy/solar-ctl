@@ -36,6 +36,13 @@ SWUPDATE_IMAGES = " \
 # into do_swuimage[depends]).
 IMAGE_DEPENDS = "solar-ctl-image"
 
+# rm_work + this recipe do not mix (hit 2026-09-28): rm_work deletes the
+# workdir and promotes stamps to setscene, but a steady-state rebuild still
+# re-runs do_swuimage (its sstate restore does not bring back the UNPACKDIR
+# sw-description or swu-signing/*.pem) and dies with FileNotFoundError on
+# an empty ${S}. The workdir here is a few KB - keep it whole.
+RM_WORK_EXCLUDE:append = " ${PN}"
+
 INHIBIT_DEFAULT_DEPS = "1"
 do_configure[noexec] = "1"
 do_compile[noexec] = "1"

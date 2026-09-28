@@ -1,4 +1,6 @@
 .zed
+.lsp
+.clj-kondo
 build/
 kas-build.log
 layers/

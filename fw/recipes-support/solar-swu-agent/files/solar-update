@@ -5,13 +5,21 @@
 # and is applied by SWUpdate itself, only after all images installed OK.
 # Doc: fw/docs/swupdate-ota.md §6.
 #
-# usage: solar-update -i <file.swu>
-#        solar-update -d "-u https://host/fw.swu"   [-A|--allow-downgrades ...]
-# All args are forwarded to swupdate after -e stable,<set> -k <key>.
+# usage: solar-update [-n|--no-reboot] (-i <file.swu> | -d "-u https://host/fw.swu")
+#        [extra swupdate args forwarded verbatim, e.g. --allow-downgrades]
+# On success SWUpdate has already written slot=<x> (bootenv flush); the reboot
+# itself is systemd's orderly shutdown - the SWUpdate core never reboots and
+# the swupdate-progress helper would use a raw reboot(2) syscall instead.
 set -e
 
+REBOOT=1
+if [ "$1" = "-n" ] || [ "$1" = "--no-reboot" ]; then
+    REBOOT=0
+    shift
+fi
+
 [ $# -ge 1 ] || {
-    echo "usage: solar-update (-i <file.swu> | -d \"-u <url>\") [extra swupdate args]" >&2
+    echo "usage: solar-update [-n|--no-reboot] (-i <file.swu> | -d \"-u <url>\") [extra swupdate args]" >&2
     exit 2
 }
 
@@ -42,5 +50,13 @@ if ! swupdate -e "stable,$SET" -k "$KEY" "$@"; then
 fi
 
 # Exit 0 implies SWUpdate already wrote slot=<x> (bootenv flush is part of
-# the install; its failure fails the update). Reboot to switch slots.
-echo "solar-update: installed and armed. Reboot to switch."
+# the install; its failure fails the update). Reboot via systemd so /data is
+# cleanly unmounted; sleep gives Ctrl-C (cancel = trap remounts /boot, no
+# reboot command is ever issued) a window on the serial console.
+if [ "$REBOOT" = "1" ]; then
+    echo "solar-update: installed and armed; rebooting in 5 s (Ctrl-C to keep running)"
+    sleep 5
+    systemctl reboot
+else
+    echo "solar-update: installed and armed (--no-reboot). Reboot to switch."
+fi

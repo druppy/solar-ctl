@@ -507,6 +507,16 @@ the on-disk env cannot be opened, `uboot.c` loads `UBOOT_DEFAULTENV`
 (`/etc/u-boot-initial-env`) and a later `env_store()` would overwrite
 `uboot.env` with it; that file is deliberately not in the image, so the
 failure path errors instead of rewriting the board env. `[wrynose]`
+And one myth busted while wiring the reboot: **the SWUpdate core never
+reboots.** `reboot = true` in sw-description only feeds progress/suricatta
+notifications (`check_reboot_enabled`, stream_interface.c); the actual
+`reboot(RB_AUTOBOOT)` syscall lives in the optional `swupdate-progress` /
+`swupdate-ipc` helpers (orderly systemd shutdown is not their model at all,
+just `-r <script>`). Since neither helper ships in our image and a raw
+syscall would bypass the unmount of rw `/data`, the wrapper issues
+`systemctl reboot` after swupdate exits 0 (5 s Ctrl-C window). The
+`reboot = true` line stays in the description as a declaration — it is what
+SURICATTA (stage 3) will consult. `[wrynose]`
 | `WEBSERVER` / `MONGOOSE(SSL)`      | y         | y           | stage 1 delivery; `MONGOOSESSL` is web TLS only    |
 | `HW_COMPATIBILITY`                 | y         | y           | ⇒ `/etc/hwrevision` is **mandatory**               |
 | `SURICATTA` (+ `CURL`/`CURL_SSL`)  | n         | n (later)   | **this is the Hawkbit client**; `CURL*` are hidden |

@@ -333,14 +333,16 @@ decision record: [`docs/swupdate-ota.md`](docs/swupdate-ota.md).
 Applying an update (on the board):
 
 ```sh
-solar-update -i /path/to/solar-ctl-image.swu      # local file
-solar-update -d "-u https://host/solar-ctl-image.swu"   # or pull from a URL
-reboot                                      # new slot boots; old slot is fallback
+solar-update -i /path/to/solar-ctl-image.swu           # local file, reboots on success
+solar-update -d "-u https://host/solar-ctl-image.swu"  # or pull from a URL
+solar-update -n -i /path/to/solar-ctl-image.swu        # stage only, reboot manually
 ```
 
 `solar-update` derives the target from `root=` in `/proc/cmdline` (running on
 p2 → install set `alt`/slot-b and vice versa) and holds `/boot` rw long enough
-for the env write. The `.swu` is ONE file for both
+for the env write, then issues the systemd reboot (5 s Ctrl-C window; SWUpdate
+itself never reboots — its helper would use a raw `reboot(2)` syscall). The
+`.swu` is ONE file for both
 slots (libconfig sets, selected with `-e stable,main|alt`), signed RSA-4096 /
 SHA-256 and verified against `/etc/solar/swupdate.pub.pem`; SWUpdate runs
 on-demand only (its daemon units are stripped from the image).

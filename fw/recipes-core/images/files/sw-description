@@ -16,6 +16,10 @@
  * picks the set, and holds /boot rw for the duration.
  *
  * hardware-compatibility is checked against /etc/hwrevision (solar-swu-agent).
+ * reboot = true: declaration only - the SWUpdate CORE never reboots (verified
+ * 2026.05.1 sources: the flag only feeds suricatta/progress notifications,
+ * and the swupdate-progress helper would use a raw reboot(2) syscall). The
+ * systemd orderly reboot is issued by /usr/bin/solar-update after exit 0.
  * installed-directly=true is MANDATORY on 512 MB: otherwise SWUpdate first
  * unpacks the payload into tmpfs /tmp.
  * C-style comments only: libconfig grammar.
@@ -29,6 +33,7 @@ software =
 {
 	version = "1.0";
 	hardware-compatibility = [ "1.0" ];
+	reboot = true;
 
 	stable =
 	{

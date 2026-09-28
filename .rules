@@ -193,7 +193,14 @@
   /proc/cmdline, mkdirs `/data/cores/slot-{a,b}`, holds /boot rw (trap
   remounts ro on EXIT) and forwards args to swupdate — both `-i f.swu` and
   `-d "-u https://..."` work (CONFIG_DOWNLOAD+DOWNLOAD_SSL now on; curl+TLS
-  in the image, nothing listens). The ARM is a per-set `bootenv = {name=
+  in the image, nothing listens), plus `-n|--no-reboot` consumed locally before
+  forwarding. On success it issues `systemctl reboot` (5 s Ctrl-C window):
+  **swupdate itself never reboots** — verified in 2026.05.1: the sw-description
+  `reboot = true` only feeds progress/suricatta notifications, and the
+  `swupdate-progress`/`-ipc` helpers (not in our image) would do a raw
+  `reboot(RB_AUTOBOOT)` syscall, bypassing the clean unmount of rw /data. The
+  `reboot = true` declaration stays in the signed description (stage-3
+  SURICATTA consults it). The ARM is a per-set `bootenv = {name=
   "slot"; value="a|b"}` entry in sw-description: the parser resolves `bootenv`
   through the SAME set-path search as `images`, and the U-Boot backend flushes
   it via libubootenv (/etc/fw_env.config, same target as fw_setenv) ONLY after
@@ -206,7 +213,16 @@
   IMAGE_NAME/IMAGE_LINK_NAME are unset → dashed filenames), `S = "${UNPACKDIR}"`
   comes from the class, full entry names in `SWUPDATE_IMAGES` are matched
   EXACTLY in DEPLOY_DIR_IMAGE (use stable symlinks), `IMAGE_DEPENDS =
-  "solar-ctl-image"`, squashfs payload via `IMAGE_FSTYPES += "squashfs-xz"`.
+  `IMAGE_DEPENDS = "solar-ctl-image"`, squashfs payload via `IMAGE_FSTYPES += "squashfs-xz"`.
+  **`RM_WORK_EXCLUDE:append = " ${PN}"` is required in this recipe** (hit
+  2026-09-28): `do_swuimage` is sstate-registered by `swupdate-common` but its
+  sstate restore does not bring back UNPACKDIR's `sw-description` or
+  `swu-signing/*.pem`; plain `rm_work` deletes the workdir, so the next
+  no-change build re-ran `do_swuimage` against an empty `${S}`
+  (`FileNotFoundError` in `swupdate_expand_bitbake_variables`, and its
+  `sstate_task_prefunc` had already deleted the deployed `.swu`). Workdir is
+  a few KB. Recovery after the bug bit: `bitbake solar-ctl-swu -c cleansstate`
+  (the promoted setscene unpack stamp must die before unpack re-runs).
   **Artifact name has a `.rootfs` infix**: `solar-ctl-swu-raspberrypi0-wifi.rootfs.swu`.
 - **sw-description gotchas** (verified by building it): libconfig comments
   must be `/* */`; the `$fn(...)`/`@@VAR@@` expansion regex scans **every
@@ -297,7 +313,10 @@
   an old sysroot (symptom: `channel_curl.c: fatal error: curl/curl.h` while
   `bitbake -e swupdate` *now* shows curl in DEPENDS). Fix: `rm -rf build/cache`
   (full re-parse; sstate untouched) before the next build after a fragment
-  edit. And the fragment regex
+  edit — warm runs can otherwise replay the stale basehash (the same
+  X→Y `not deterministic` error recurs across several warm builds until one
+  cold run settles the cache; CI is immune, its `build/cache` is always cold).
+  And the fragment regex
   accepts `# CONFIG_FOO is not set`, so that form really removes a base `y` and
   its DEPENDS. Trap: `HAVE_*` are `option env=` symbols probed from the sysroot
   by SWUpdate's own Makefile, so **olddefconfig silently drops** any symbol with
