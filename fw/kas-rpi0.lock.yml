@@ -1,0 +1,14 @@
+header:
+  version: 14
+overrides:
+  repos:
+    oe-core:
+      commit: 883075157987ca300af59185b903d6d1977234c3
+    bitbake:
+      commit: f0df79b6b56f6a69067adf974978d9405077f246
+    meta-raspberrypi:
+      commit: f62c67921474370829d24a4fa01ef88543f3906b
+    meta-openembedded:
+      commit: 14282a02be9c74a1276a7cda7d6c89e054699a11
+    meta-swupdate:
+      commit: c0658455606b3a37d85d7cf03703d8b8d2ead667

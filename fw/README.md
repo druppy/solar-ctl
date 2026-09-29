@@ -19,7 +19,8 @@ secrets are set):
   an unset secret **fails the build** - the repo ships no fallback keypair,
   so no build can ever sign with a key someone left in the tree. The job
   also asserts SWUpdate's merged
-  kconfig (signing on, web UI/lua/scripts/UBOOT/MTD off) from the
+  kconfig (signing + U-Boot bootenv backend + URL download on;
+  web UI/lua/scripts/MTD/SURICATTA off) from the
   `${T}/swupdate-merged-dotconfig` snapshot — kconfig drops symbols
   silently and the file is the only proof of what stuck.
 - **caching**: only `build/sstate-cache` (~1.3 GB) is cached —
@@ -27,7 +28,8 @@ secrets are set):
   GitHub's per-repo cache quota is 10 GB, so caching downloads sat at
   9.97 GiB with zero headroom. `restore-keys` fall back to the newest
   `yocto-*` cache when the key rotates, and saves carry a `-<sha>` suffix
-  so every push refreshes the cache (sstate is content-addressed — a
+  so every push (and same-repo PR) refreshes the cache (sstate is
+  content-addressed — a
   stale-but-newer cache still only rebuilds what changed).
 - **cold** builds take well over an hour on runners; warm (cache hit)
   builds are minutes. First run is always cold.
@@ -214,7 +216,7 @@ The kernel RS485 mode (auto-RTS per frame) is configured with
 
 ```sh
 stty -F /dev/ttyAMA0 9600
-cd /etc && rs485ctl /dev/ttyAMA0 -e -n --send-delay 1 --after-delay 1
+rs485ctl /dev/ttyAMA0 -e -n --send-delay 1 --after-delay 1
 mbpoll -a 3 -b 9600 -t 4 -r 1 /dev/ttyAMA0
 ```
 
@@ -255,6 +257,8 @@ mbpoll -a 3 -b 9600 -t 4 -r 1 /dev/ttyAMA0
    ```
 
    Generate the hex PSK with: `wpa_passphrase "SSID" 'pass' | sed -n 's/.*psk=//p'`
+   (A plain passphrase works too — the recipe writes hex PSKs raw and quotes
+   passphrases, per wpa_supplicant's syntax rules.)
 
 2. Build from the repo root:
 
@@ -265,7 +269,8 @@ mbpoll -a 3 -b 9600 -t 4 -r 1 /dev/ttyAMA0
 
 ## Flash
 
-The image is a hybrid `.wic.bz2` (FAT32 boot partition + ext4 rootfs):
+The image is a `.wic.bz2` (p1 vfat boot + squashfs-xz root slots p2/p3 +
+ext4 `/data` on p4):
 
 ```sh
 ls build/tmp/deploy/images/raspberrypi0-wifi/solar-ctl-image-raspberrypi0-wifi.rootfs.wic.bz2

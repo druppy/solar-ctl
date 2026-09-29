@@ -2,7 +2,7 @@ SUMMARY = "Set kernel RS485 (TIOCSRS485) RTS direction-control on a serial port"
 DESCRIPTION = "Tiny helper to enable/disable kernel RS485 mode and tune RTS \
 polarity and before/after-send delays, for half-duplex buses with a \
 MAX485-style transceiver driven by the UART's RTS line (solar-ctl inverter bus)."
-HOMEPAGE = "https://github.com/kloknibor/solar-ctl"
+HOMEPAGE = "https://github.com/duppy/solar-ctl"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://rs485ctl.c;md5=63e16379edbde0f55b66f767badff5c7"
 

@@ -33,8 +33,21 @@ SRC_URI = " \
 
 do_install() {
     install -d ${D}${sysconfdir}/wpa_supplicant
+    # wpa_supplicant PSK forms are NOT interchangeable: a quoted value is a
+    # passphrase, a bare 64-hex value is the raw pre-computed key (what
+    # wpa_passphrase and the README/CI hints tell users to paste). Quoting
+    # the hex form silently yields the wrong network key, so quote only
+    # non-hex passphrases.
+    case "$WIFI_PSK" in
+        *[!0-9a-fA-F]*) psk_out="\"$WIFI_PSK\"" ;;   # not hex -> passphrase
+        *) if [ "${#WIFI_PSK}" -eq 64 ]; then
+               psk_out="$WIFI_PSK"
+           else
+               psk_out="\"$WIFI_PSK\""
+           fi ;;
+    esac
     sed -e "s|@SSID@|${WIFI_SSID}|" \
-        -e "s|@PSK@|${WIFI_PSK}|" \
+        -e "s|@PSK@|${psk_out}|" \
         -e "s|@COUNTRY@|${WIFI_COUNTRY}|" \
         ${UNPACKDIR}/wpa_supplicant-wlan0.conf.template \
         > ${D}${sysconfdir}/wpa_supplicant/wpa_supplicant-wlan0.conf

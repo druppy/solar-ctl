@@ -111,9 +111,9 @@
 	__overrides__ {
 		speed = <&nv3007>, "spi-max-frequency:0";
 		dc_pin = <&nv3007>, "dc-gpios:4",
-			 <&nv3007_pins>, "brcm,pins:4";
+			 <&nv3007_pins>, "brcm,pins:0";
 		reset_pin = <&nv3007>, "reset-gpios:4",
-			    <&nv3007_pins>, "brcm,pins:0";
+			    <&nv3007_pins>, "brcm,pins:4";
 		led_pin = <&nv3007_backlight>, "gpios:4",
 			  <&nv3007_bl_pins>, "brcm,pins:0";
 	};

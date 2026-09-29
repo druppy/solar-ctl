@@ -6,5 +6,5 @@ country=@COUNTRY@
 
 network={
     ssid="@SSID@"
-    psk="@PSK@"
+    psk=@PSK@
 }

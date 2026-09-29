@@ -28,12 +28,13 @@ jobs:
       - uses: actions/checkout@v7
 
       # Defense in depth: these gitignored files carry the WiFi PSK
-      # (.zed/tasks.json env block, kas wifi fragments). Fail the build
-      # loudly if one ever slips into a commit (git add -f, .gitignore
-      # regression) - the repo is public.
+      # (.zed/tasks.json env block, kas wifi fragments) or signing keys
+      # (swu-keys/, any stray *.pem). Fail the build loudly if one ever
+      # slips into a commit (git add -f, .gitignore regression) - the
+      # repo is public.
       - name: Guard against committed secret files
         run: |
-          LEAKED=$(git ls-files .zed/tasks.json .kas-wifi-local.yml .kas-wifi-ci.yml)
+          LEAKED=$(git ls-files .zed swu-keys .kas-wifi-local.yml .kas-wifi-ci.yml '*.pem')
           if [ -n "$LEAKED" ]; then
             echo "::error::secret-bearing file(s) tracked by git: $LEAKED"
             exit 1
@@ -207,13 +208,19 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
 
-      # -<sha> suffix: every push saves a fresh entry (a fixed key would
-      # be skipped with "cache already exists" whenever only .c/.cfg
-      # files changed, leaving stale sstate behind). LRU eviction keeps
-      # ~8 generations of ~1 GB entries under the 10 GB quota.
+      # -<sha> suffix: every run that saves writes a fresh entry (a fixed
+      # key would be skipped with "cache already exists" whenever only
+      # .c/.cfg files changed, leaving stale sstate behind). LRU eviction
+      # keeps ~8 generations of ~1 GB entries under the 10 GB quota.
+      # Same-repo PR runs save too (a long-lived PR that never saves pays
+      # full cold-build cost on every iteration - measured 4 PR pushes in
+      # a row restoring the same 5-day-old cache); fork PRs stay excluded
+      # (they cannot read secrets and must not write shared cache).
       - name: Save bitbake cache
         uses: actions/cache/save@v6
-        if: github.event_name != 'pull_request'
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
         with:
           path: build/sstate-cache
           key: yocto-${{ hashFiles('fw/**/*.yml', 'fw/**/*.bb', 'fw/conf/**') }}-${{ github.sha }}
