@@ -1,4 +1,4 @@
-# solar-ctl SWUpdate kconfig-free blob generator. libubootenv CANNOT create
+# solar-ctl U-Boot environment blob generator (no kconfig needed). libubootenv CANNOT create
 # the env file: it must pre-exist at exactly CONFIG_ENV_SIZE (16 KiB in
 # rpi_0_w_defconfig, CONFIG_ENV_FAT_FILE) with a valid header, or every
 # fw_printenv/fw_setenv dies with "Cannot initialize environment"

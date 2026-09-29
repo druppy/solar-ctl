@@ -50,6 +50,9 @@ dt_u32() {
 		printf '  %-44s (empty)\n' "$1"
 		return 0
 	fi
+	# Nodes may hold several cells; keep only the first 32-bit one, else
+	# $((0x...)) overflows on 64-bit values and prints garbage.
+	hex=$(printf '%s' "$hex" | cut -c1-8)
 	printf '  %-44s 0x%s = %s\n' "$1" "$hex" "$((0x$hex))"
 }
 
@@ -73,7 +76,6 @@ sec "system"
 kv /proc/cpuinfo Model
 kv /proc/cpuinfo Revision
 kv /proc/version Linux
-cat /etc/version 2>/dev/null
 printf '  uname: '; uname -a
 if command -v systemctl >/dev/null 2>&1; then
 	printf '  systemd: '; systemctl --version 2>/dev/null | head -n 1

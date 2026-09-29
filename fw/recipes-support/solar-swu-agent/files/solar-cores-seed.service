@@ -1,7 +1,10 @@
 [Unit]
 Description=solar-ctl seed per-slot kernel on /data (first boot)
-# /boot (p1 vfat, ro via fstab) must be mounted to read uImage from it;
-# /data is already mounted by the overlayfs-etc preinit before init runs.
+# /boot (p1 vfat, ro via boot.mount - there is no fstab entry for it on
+# this image) must be mounted to read uImage from it; requires it so a
+# failed mount fails this unit loudly. /data is already mounted by the
+# overlayfs-etc preinit before init runs.
+RequiresMountsFor=/boot
 After=boot.mount
 
 [Service]

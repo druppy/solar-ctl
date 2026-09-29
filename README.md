@@ -20,6 +20,18 @@ Zero / Zero 2 W with a machine change — see `fw/kas-rpi0.yml`), including the
 inverter controller, to make a clean FW for the RPi. Build instructions:
 [`fw/README.md`](fw/README.md).
 
+Note that this firmware is a wild overkill for this application, but I needed to demonstrate that it was in fact possible to
+make a production grade FW for a simple RPi Zero, and when it is doable here, it may also work for other platforms too. 
+
+### Security warning
+
+The images built in github trust exactly one swupdate signing key: the maintainer private key, which lives only in the
+GitHub Actions secrets and is never committed — the public half is what gets baked into the image. That means anyone can
+flash a release image and update it with that release's swu files, but nobody else can sign new ones. If you want a
+private FW, build it locally and make your own key pair (`fw/tools/swu-keygen.sh`).
+
+Also, there is no disk encryption and no secure boot in the current version, it should be doable and later this may be added.
+
 ## TFT Display 
 
 - 2.79 Inch 142×428 

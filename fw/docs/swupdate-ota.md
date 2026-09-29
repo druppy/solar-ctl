@@ -478,10 +478,13 @@ worth-worrying-about unknown.
 
 `[implemented 2026-09-28]` SWUpdate entered the image with a **smaller**
 config than this gate table: `LUA`/`LUASCRIPTHANDLER`/`SHELLSCRIPTHANDLER`/
-`SCRIPTS`/`WEBSERVER`/`MONGOOSE`/`DOWNLOAD` are now all **off** — the `.swu`
-is pure data and the slot switch is `fw_setenv` from the rootfs wrapper
-(`/usr/bin/solar-update`), so the "keep (scripts)" rows above are void (and
-liblua left DEPENDS with them). The compile gate itself is retired: the
+`SCRIPTS`/`WEBSERVER`/`MONGOOSE` are off — the `.swu`
+is pure data and (at that moment) the slot switch was `fw_setenv` from the
+rootfs wrapper (`/usr/bin/solar-update`), so the "keep (scripts)" rows above
+are void (and liblua left DEPENDS with them). Both later moved: `DOWNLOAD` /
+`DOWNLOAD_SSL` are **on** (see part 2 below) and the slot switch moved from
+`fw_setenv` in the wrapper to swupdate's own `bootenv`/U-Boot backend — the
+"keep (scripts)" rows above stay void (and liblua left DEPENDS with them). The compile gate itself is retired: the
 `swupdate` CI job and the `fw-swupdate/` gate layer are gone, the bbappend +
 fragment live in `fw/recipes-support/swupdate/` (kas-rpi0.yml now adds
 meta-swupdate, so the dangling-bbappend rule is satisfied), and the merged
@@ -1173,5 +1176,7 @@ Then update §5 (which tier is the plan of record), this matrix, and `.rules`.
    the RAM `BOOTLOADER_NONE` dict. `installed-directly=true`. Never OTA p1.
    **DONE in-tree 2026-09-28 (part 2 above): env lives on p1 `uboot.env`**
    (U-Boot backend + `bootenv` section), which supersedes "env on `/data`" —
-   still never the RAM dict. Bench A→B→A through `solar-update` still open.
+   (U-Boot backend + `bootenv` section), which supersedes "env on `/data`" —
+   still never the RAM dict. Bench A→B→A through `solar-update` verified
+   2026-09-28 (`bench-2026-09-24.md`: "OTA update flow verified").
 6. Web UI **after** signing is switched on; Hawkbit (`SURICATTA`) last.

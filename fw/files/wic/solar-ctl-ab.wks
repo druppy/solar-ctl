@@ -1,9 +1,10 @@
 # solar-ctl A/B layout (doc swupdate-ota.md §5, §10 step 4).
 #
 #  p1 vfat    GPU firmware + u-boot.bin (deployed as kernel.img) + boot.scr
-#             + uImage (top-level fallback) + slot-a/ per-slot kernel. p1
-#             only ever GROWS (slot-b/ appears with the first install); the
-#             update path never rewrites bootcode/start.elf/u-boot.bin.
+#             + uboot.env + uImage (factory fallback only). Per-slot kernels
+#             live on ext4 /data/cores/slot-{a,b} since 2026-09-28, NOT on
+#             p1; the update path only ever rewrites uboot.env, never
+#             bootcode.bin/start.elf/u-boot.bin.
 #  p2/p3      squashfs-xz root slots, FIXED size: the payload must fit or
 #             the wic build fails (there is no resize at flash time).
 #  p4 ext4    /data: mounted by the overlayfs-etc preinit, hosts the /etc
