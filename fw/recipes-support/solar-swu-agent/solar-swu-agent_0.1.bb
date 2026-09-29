@@ -26,8 +26,8 @@ SRC_URI = " \
 S = "${UNPACKDIR}"
 
 # do_swu_signing_keys (our class) materializes ${WORKDIR}/swu-signing/
-# public.pem from SOLAR_SWU_PUBLIC_KEY (content | path | dev fallback);
-# that is what lands in /etc/solar below.
+# public.pem - derived from SOLAR_SWU_PRIVATE_KEY (required; the class
+# ships no fallback key); that is what lands in /etc/solar below.
 inherit solar-swu-signing
 inherit systemd
 

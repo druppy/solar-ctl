@@ -124,14 +124,24 @@ jobs:
           echo "KAS_WIFI_FRAGMENT=.kas-wifi-ci.yml" >> "$GITHUB_ENV"
           echo "::notice::WiFi credentials are BAKED INTO THIS BUILD's image (PSK extractable)!"
 
-      - name: Build firmware image
-        # .swu signing keys from secrets (fw/tools/swu-keygen.sh). Empty
-        # secrets are passed through as empty: the build then signs with the
-        # committed throwaway dev key (loud bitbake warning) so forks and
-        # fresh clones stay green. NEVER publish dev-key .swu files.
+      # .swu signing: ONLY the private key is a secret; the build derives
+      # the public key from it (openssl rsa -pubout) and cross-checks
+      # SOLAR_SWU_PUBLIC_KEY if ever set. There is no committed fallback
+      # keypair anymore - a missing secret fails the build (this check gives
+      # the readable error; forks cannot read secrets, so fork PRs are
+      # expected to fail this step).
+      - name: Require signing key secret
         env:
           SOLAR_SWU_PRIVATE_KEY: ${{ secrets.SOLAR_SWU_PRIVATE_KEY }}
-          SOLAR_SWU_PUBLIC_KEY: ${{ secrets.SOLAR_SWU_PUBLIC_KEY }}
+        run: |
+          if [ -z "$SOLAR_SWU_PRIVATE_KEY" ]; then
+            echo "::error::Actions secret SOLAR_SWU_PRIVATE_KEY is not set. The repo deliberately ships NO fallback keys. Create a keypair with fw/tools/swu-keygen.sh, then: gh secret set SOLAR_SWU_PRIVATE_KEY < swu-keys/private.pem"
+            exit 1
+          fi
+
+      - name: Build firmware image
+        env:
+          SOLAR_SWU_PRIVATE_KEY: ${{ secrets.SOLAR_SWU_PRIVATE_KEY }}
         run: kas build fw/kas-rpi0.yml${KAS_WIFI_FRAGMENT:+:$KAS_WIFI_FRAGMENT}
 
       # The image build parses+builds swupdate itself now, so no separate

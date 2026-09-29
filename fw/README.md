@@ -14,10 +14,11 @@ secrets are set):
 - **push/PR to main** — build + `solar-ctl-image-<sha>` artifact (`wic.bz2`,
   `bmap`, `manifest`, signed `.swu`, `SHA256SUMS`)
 - **tag `v*`** — same build, additionally published as a GitHub Release
-- **signing keys** — the build step gets `SOLAR_SWU_PRIVATE_KEY` /
-  `SOLAR_SWU_PUBLIC_KEY` from repo secrets; unset secrets are fine, the
-  build then signs with the committed throwaway dev key (loud bitbake
-  warning) so forks stay green. The job also asserts SWUpdate's merged
+- **signing keys** — the build step gets `SOLAR_SWU_PRIVATE_KEY` from the
+  repo secret (the public key is derived from it, never stored separately);
+  an unset secret **fails the build** - the repo ships no fallback keypair,
+  so no build can ever sign with a key someone left in the tree. The job
+  also asserts SWUpdate's merged
   kconfig (signing on, web UI/lua/scripts/UBOOT/MTD off) from the
   `${T}/swupdate-merged-dotconfig` snapshot — kconfig drops symbols
   silently and the file is the only proof of what stuck.
@@ -58,7 +59,7 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 | `conf/layer.conf`                        | `fw/` is a small meta layer (`solar-ctl`)                                                     |
 | `conf/distro/solar-ctl.conf`             | Our distro: `TCLIBC=musl`, `INIT_MANAGER=systemd`, lean distro features                       |
 | `files/wic/solar-ctl-ab.wks`             | A/B disk layout: p1 vfat + p2/p3 squashfs slots + p4 ext4 `/data`                             |
-| `classes/solar-swu-signing.bbclass`      | `SOLAR_SWU_*_KEY` resolution (content / path / throwaway dev key) → SWUpdate signing          |
+| `classes/solar-swu-signing.bbclass`      | `SOLAR_SWU_*_KEY` resolution (content / path; no fallback; public key derived + cross-checked) → SWUpdate signing |
 | `recipes-core/images/solar-ctl-image.bb` | The image (U-Boot A/B layout, SWUpdate agent, RO root + `/etc` overlay)                       |
 | `recipes-core/images/solar-ctl-swu.bb`   | Single signed `.swu` (both slots as `stable,main`/`stable,alt` sets)                          |
 | `recipes-support/swupdate/`              | bbappend + kconfig fragment: minimal swupdate (signing on, web UI/lua/scripts off)            |
@@ -72,7 +73,6 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 | `docs/swupdate-ota.md`                   | **A/B OTA design record** (U-Boot per-slot kernel, squashfs roots, `/etc` overlay, SWUpdate)  |
 | `tools/ota-probe.sh`                     | Read-only on-target probe of boot chain/filesystems (run before OTA work)                     |
 | `tools/swu-keygen.sh`                    | Generate the RSA-4096 `.swu`/FIT signing keypair                                              |
-| `files/keys/dev/`                        | Committed **throwaway** dev keypair (build fallback; never for releases)                      |
 
 SWUpdate's bbappend lives in `fw/` and is therefore parsed by **every** build —
 that is only legal because `kas-rpi0.yml` adds `meta-swupdate` (a dangling
@@ -357,14 +357,15 @@ service is receive-only, nothing accepts update commands).
 fw/tools/swu-keygen.sh                      # RSA-4096 (NOT ed25519: SWUpdate
                                             # and U-Boot FIT have no ed25519;
                                             # same keypair later signs FIT too)
-# local:  put the PEM content (or absolute paths) in .zed/tasks.json env as
-#         SOLAR_SWU_PRIVATE_KEY / SOLAR_SWU_PUBLIC_KEY
-# CI:     gh secret set SOLAR_SWU_PRIVATE_KEY < private.pem   (same for public)
+# local:  put the private key (PEM content or absolute path) in
+#         .zed/tasks.json env as SOLAR_SWU_PRIVATE_KEY; the public key is
+#         derived (set SOLAR_SWU_PUBLIC_KEY only if you want it cross-checked)
+# CI:     gh secret set SOLAR_SWU_PRIVATE_KEY < private.pem
 ```
 
-Without the env vars every build (including CI) signs with the committed
-throwaway dev key `fw/files/keys/dev/` — fine for the bench, and the built
-`.swu` will only install on boards flashed from this repo's images. Flash a
+Without the env var the build **fails** (hard `bb.fatal`) — deliberately: the
+repo ships no keypair of any kind, so a signed artifact can never come from a
+key that merely happened to be committed. Flash a
 milestone card with the usual `bmaptool` procedure (`.wic.bz2` + `.bmap`).
 
 Before touching the layout on older hardware, run the read-only probe and

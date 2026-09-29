@@ -621,9 +621,14 @@ the SAME keypair is planned for FIT verified boot later. `[master] [bench]`
 `openssl dgst` on the artifact and installs ran with the pub key baked in the image)
 
 Key plumbing mirrors the WiFi policy (`fw/classes/solar-swu-signing.bbclass`):
-`SOLAR_SWU_PRIVATE_KEY`/`SOLAR_SWU_PUBLIC_KEY` env values are PEM **content**
-or an **absolute host path**; empty falls back to the committed throwaway dev
-key with a loud warning. Public key + `/etc/hwrevision` are shipped by
+`SOLAR_SWU_PRIVATE_KEY` (PEM **content** or an **absolute host path**) is
+REQUIRED — unset is a hard `bb.fatal`, the repo ships **no fallback keypair**
+(the throwaway dev pair was removed 2026-09-28 to kill any misunderstanding
+about what signed an artifact). `SOLAR_SWU_PUBLIC_KEY` is optional: the build
+derives it with `openssl rsa -pubout` (openssl-native) and — if it was
+supplied — cross-checks it against the private key (mismatch = fatal). CI
+holds only the secret `SOLAR_SWU_PRIVATE_KEY`; fork PRs without secret access
+fail that step by design. Public key + `/etc/hwrevision` are shipped by
 `solar-swu-agent`; `hardware-compatibility = ["1.0"]` in sw-description makes
 the check live. **`/etc/hwrevision` must be two tokens, `"<boardname>
 <revision>"`** — `hw-compatibility.c` does `fscanf("%ms %ms")` and fails

@@ -177,16 +177,24 @@
   `EVP_DigestVerifyUpdate/Final`, OpenSSL ed25519 is one-shot only, `openssl
   dgst -sign` refuses ed25519, FIT has no ed25519; same keypair is planned to
   sign FIT images later, which settles it). Keys env-style like WiFi:
-  `SOLAR_SWU_PRIVATE_KEY`/`SOLAR_SWU_PUBLIC_KEY` = PEM **content** or
-  **absolute host path** (declared in kas `env:`); empty ⇒ committed
-  throwaway dev key `fw/files/keys/dev/` + loud bb.warn (keeps CI green).
-  Real keys: `fw/tools/swu-keygen.sh` → `.zed/tasks.json` env / Actions
-  secrets `SOLAR_SWU_*`. Plumbing: `fw/classes/solar-swu-signing.bbclass`
+  `SOLAR_SWU_PRIVATE_KEY` = PEM **content** or **absolute host path**
+  (declared in kas `env:`) is REQUIRED — empty ⇒ hard bb.fatal; the repo
+  ships NO fallback keypair (committed dev pair removed 2026-09-28: never
+  let a build silently sign with a key that merely lives in the tree).
+  `SOLAR_SWU_PUBLIC_KEY` optional: derived via `openssl rsa -pubout`
+  (openssl-native depends added in the class) and cross-checked against the
+  private key when also supplied (mismatch = fatal). CI: ONE secret
+  `SOLAR_SWU_PRIVATE_KEY` + an explicit `Require signing key secret` step
+  (fork PRs without secrets fail by design). Real keys:
+  `fw/tools/swu-keygen.sh` → `.zed/tasks.json` env / Actions
+  secret `SOLAR_SWU_PRIVATE_KEY`. Plumbing: `fw/classes/solar-swu-signing.bbclass`
   (writes `${WORKDIR}/swu-signing/{private,public}.pem` in a task wired via
   `bb.build.addtask` inside anon-python — plain `addtask ... before
   do_swuimage` breaks recipes lacking that task, and setting a `before`
   *flag* by hand does nothing; `do_swuimage[vardeps]`/`do_install[vardeps]`
-  so key rotation re-runs tasks). **vardeps must also be on
+  so key rotation re-runs tasks — and since the staged pub key is DERIVED,
+  `do_install[vardeps]` must include `SOLAR_SWU_PRIVATE_KEY`, not just the
+  public one). **vardeps must also be on
   `do_swu_signing_keys` itself** (hit 2026-09-28 when first real keys went
   into `.zed/tasks.json`): that task reads the vars via a string-literal
   variable NAME (`solar_swu_get_key(d, "SOLAR_SWU_...")`), invisible to

@@ -34,12 +34,13 @@ env:
   SOLAR_WIFI_COUNTRY: GB
   # .swu signing keypair (RSA-4096, fw/tools/swu-keygen.sh; class
   # fw/classes/solar-swu-signing.bbclass). Each value is either the PEM
-  # CONTENT (starts with '-----BEGIN') or an ABSOLUTE host path. Empty
-  # signs with the committed throwaway dev key + a loud bb.warn - fine for
-  # CI/fresh clones, never for a release. Same keypair will later verify
-  # U-Boot FIT images, hence RSA and not ed25519. REAL KEYS: only in
-  # .zed/tasks.json env / Actions secrets (secrets.SOLAR_SWU_*), never in
-  # git (repo is PUBLIC).
+  # CONTENT (starts with '-----BEGIN') or an ABSOLUTE host path.
+  # SOLAR_SWU_PRIVATE_KEY is REQUIRED: empty = hard build error (there is
+  # no committed fallback keypair). SOLAR_SWU_PUBLIC_KEY is optional - the
+  # build derives it from the private key and cross-checks it when set.
+  # Same keypair will later verify U-Boot FIT images, hence RSA and not
+  # ed25519. REAL KEYS: only in .zed/tasks.json env / the Actions secret
+  # SOLAR_SWU_PRIVATE_KEY, never in git (repo is PUBLIC).
   SOLAR_SWU_PRIVATE_KEY: ""
   SOLAR_SWU_PUBLIC_KEY: ""
 
