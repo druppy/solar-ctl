@@ -1,0 +1,13 @@
+[Unit]
+Description=solar-ctl seed per-slot kernel on /data (first boot)
+# /boot (p1 vfat, ro via fstab) must be mounted to read uImage from it;
+# /data is already mounted by the overlayfs-etc preinit before init runs.
+After=boot.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/solar-cores-seed
+
+[Install]
+WantedBy=multi-user.target

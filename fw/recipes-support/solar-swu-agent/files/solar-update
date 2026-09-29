@@ -1,0 +1,67 @@
+#!/bin/sh
+# Install a signed .swu into the INACTIVE slot. Busybox-ash safe.
+# The only slot-topology knowledge here is root= -> set (which set is NOT us);
+# the slot=a|b U-Boot env write lives in the signed sw-description (`bootenv`)
+# and is applied by SWUpdate itself, only after all images installed OK.
+# Doc: fw/docs/swupdate-ota.md §6.
+#
+# usage: solar-update [-n|--no-reboot] (-i <file.swu> | -d "-u https://host/fw.swu")
+#        [extra swupdate args forwarded verbatim, e.g. --allow-downgrades]
+# On success SWUpdate has already written slot=<x> (bootenv flush); the reboot
+# is done by solar-swupdate-progress.service (swupdate-progress sees SUCCESS
+# on the progress socket and runs solar-swu-reboot -> systemctl reboot).
+# -n|--no-reboot just plants /run/solar-update/no-reboot, which that gate
+# script consumes instead of rebooting (one-shot, tmpfs: gone on next boot).
+set -e
+
+NO_REBOOT=0
+if [ "$1" = "-n" ] || [ "$1" = "--no-reboot" ]; then
+    NO_REBOOT=1
+    shift
+fi
+
+[ $# -ge 1 ] || {
+    echo "usage: solar-update [-n|--no-reboot] (-i <file.swu> | -d \"-u <url>\") [extra swupdate args]" >&2
+    exit 2
+}
+
+KEY=/etc/solar/swupdate.pub.pem
+[ -f "$KEY" ] || { echo "solar-update: missing $KEY" >&2; exit 1; }
+
+ROOTPART=$(sed -n 's|.*root=/dev/mmcblk0p\([0-9]\{1,2\}\).*|\1|p' /proc/cmdline)
+case "$ROOTPART" in
+    2) SET=alt ;;   # running slot a -> install slot b
+    3) SET=main ;;  # running slot b -> install slot a
+    *) echo "solar-update: unexpected root= partition '$ROOTPART' (not p2/p3?)" >&2
+       exit 1 ;;
+esac
+
+# The raw handler needs the target files' parents to exist.
+mkdir -p /data/cores/slot-a /data/cores/slot-b
+
+# Reboot contract with solar-swu-reboot: default = reboot, fresh every run.
+mkdir -p /run/solar-update
+rm -f /run/solar-update/no-reboot
+[ "$NO_REBOOT" = "1" ] && : > /run/solar-update/no-reboot
+
+# The env write (bootenv flush) lands on p1, which is mounted ro by default:
+# libubootenv - the same target fw_setenv uses - cannot write it otherwise.
+# Hold /boot rw for the whole run (the flush happens inside swupdate).
+mount -o remount,rw /boot
+trap 'mount -o remount,ro /boot' EXIT INT TERM
+
+echo "solar-update: installing set 'stable,$SET' ($*)"
+if ! swupdate -e "stable,$SET" -k "$KEY" "$@"; then
+    echo "solar-update: swupdate FAILED - slot NOT armed" >&2
+    exit 1
+fi
+
+# Exit 0 implies SWUpdate already wrote slot=<x> (bootenv flush is part of
+# the install; its failure fails the update). The reboot is NOT issued here:
+# solar-swupdate-progress.service logs the whole install to journald and
+# reboots via systemd moments after SUCCESS (unless we planted the marker).
+if [ "$NO_REBOOT" = "1" ]; then
+    echo "solar-update: installed and armed (--no-reboot). Reboot to switch."
+else
+    echo "solar-update: installed and armed; reboot follows via journald-logged progress service."
+fi

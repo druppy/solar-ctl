@@ -1,0 +1,22 @@
+[Unit]
+Description=solar-ctl SWUpdate progress logger (journald) + reboot hook
+# Receive-only listener on swupdate's progress socket. The write channel
+# (sockinstctrl) is NOT opened: swupdate.service/.socket stay deleted by
+# solar-ctl-image.bb - nothing accepts update commands here, this only
+# watches and logs.
+
+[Service]
+# -w: block silently until a swupdate run creates the progress socket
+#     (swupdate starts its progress server on EVERY run, incl. CLI -i/-d;
+#     without -w the tool logs a connect error every second instead).
+# -r <script>: after a SUCCESS with steps installed, run our gate script
+#     (raw reboot(2) would be the default - we want systemd's shutdown).
+# TRAP: do NOT add RuntimeDirectory= here. get_prog_socket() (ipc/
+# progress_ipc.c) follows $RUNTIME_DIRECTORY, while swupdate is started
+# from a shell without it -> both must land on /tmp/swupdateprog.
+ExecStart=/usr/bin/swupdate-progress -w -r /usr/libexec/solar-swu-reboot
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

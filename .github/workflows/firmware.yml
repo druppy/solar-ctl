@@ -124,8 +124,58 @@ jobs:
           echo "KAS_WIFI_FRAGMENT=.kas-wifi-ci.yml" >> "$GITHUB_ENV"
           echo "::notice::WiFi credentials are BAKED INTO THIS BUILD's image (PSK extractable)!"
 
+      # .swu signing: ONLY the private key is a secret; the build derives
+      # the public key from it (openssl rsa -pubout) and cross-checks
+      # SOLAR_SWU_PUBLIC_KEY if ever set. There is no committed fallback
+      # keypair anymore - a missing secret fails the build (this check gives
+      # the readable error; forks cannot read secrets, so fork PRs are
+      # expected to fail this step).
+      - name: Require signing key secret
+        env:
+          SOLAR_SWU_PRIVATE_KEY: ${{ secrets.SOLAR_SWU_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SOLAR_SWU_PRIVATE_KEY" ]; then
+            echo "::error::Actions secret SOLAR_SWU_PRIVATE_KEY is not set. The repo deliberately ships NO fallback keys. Create a keypair with fw/tools/swu-keygen.sh, then: gh secret set SOLAR_SWU_PRIVATE_KEY < swu-keys/private.pem"
+            exit 1
+          fi
+
       - name: Build firmware image
+        env:
+          SOLAR_SWU_PRIVATE_KEY: ${{ secrets.SOLAR_SWU_PRIVATE_KEY }}
         run: kas build fw/kas-rpi0.yml${KAS_WIFI_FRAGMENT:+:$KAS_WIFI_FRAGMENT}
+
+      # The image build parses+builds swupdate itself now, so no separate
+      # gate job - but a green build does NOT prove our kconfig fragment
+      # applied (olddefconfig silently drops symbols whose HAVE_<lib> probe
+      # failed). The bbappend snapshots the merged .config into ${T}; rm_work
+      # never deletes `temp`.
+      - name: Verify swupdate merged kconfig
+        run: |
+          mapfile -t cfgs < <(find build/tmp/work -type f -name swupdate-merged-dotconfig | sort -u)
+          if [ "${#cfgs[@]}" -eq 0 ]; then
+            echo "::error::no swupdate-merged-dotconfig under build/tmp/work - swupdate did not run do_configure?"
+            exit 1
+          fi
+          fail=0
+          for cfg in "${cfgs[@]}"; do
+            echo "--- $cfg"
+            grep -E '^(CONFIG_[A-Z0-9_]+=|# CONFIG_[A-Z0-9_]+ is not set)' "$cfg" | grep -E \
+              'UBOOT|BOOTLOADER|MTD|CFI|HASH|SIGN|SSL|CRYPTO|SYSTEMD|SURICATTA|CURL|WEBSERVER|MONGOOSE|DISKPART|LUA|RAW|SCRIPTS|DOWNLOAD' | sort
+            grep -qx 'CONFIG_SIGNED_IMAGES=y' "$cfg" || { echo "::error::$cfg lost CONFIG_SIGNED_IMAGES"; fail=1; }
+            grep -qx 'CONFIG_HASH_VERIFY=y' "$cfg" || { echo "::error::$cfg lost CONFIG_HASH_VERIFY"; fail=1; }
+            grep -qx 'CONFIG_SIGALG_RAWRSA=y' "$cfg" || { echo "::error::$cfg lost CONFIG_SIGALG_RAWRSA (signing algo!)"; fail=1; }
+            # U-Boot backend + explicit default-choice pin (the choice has no
+            # default statement; see the fragment) and the URL download channel.
+            grep -qx 'CONFIG_UBOOT=y' "$cfg" || { echo "::error::$cfg lost CONFIG_UBOOT (slot arm via bootenv!)"; fail=1; }
+            grep -qx 'CONFIG_BOOTLOADER_DEFAULT_UBOOT=y' "$cfg" || { echo "::error::$cfg lost CONFIG_BOOTLOADER_DEFAULT_UBOOT (choice silently flipped?)"; fail=1; }
+            grep -qx 'CONFIG_BOOTLOADERHANDLER=y' "$cfg" || { echo "::error::$cfg lost CONFIG_BOOTLOADERHANDLER (bootenv image handler missing - parser rejects the .swu!)"; fail=1; }
+            grep -qx 'CONFIG_DOWNLOAD=y' "$cfg" || { echo "::error::$cfg lost CONFIG_DOWNLOAD (-u fetch)"; fail=1; }
+            grep -qx 'CONFIG_DOWNLOAD_SSL=y' "$cfg" || { echo "::error::$cfg lost CONFIG_DOWNLOAD_SSL (https fetch)"; fail=1; }
+            for off in CONFIG_MTD CONFIG_WEBSERVER CONFIG_LUA CONFIG_SCRIPTS CONFIG_SURICATTA; do
+              grep -qx "${off}=y" "$cfg" && { echo "::error::$cfg has $off=y (fragment not applied?)"; fail=1; }
+            done
+          done
+          exit $fail
 
       # Use the stable (symlinked) artifact names, resolve to real files.
       - name: Stage release artifacts
@@ -137,6 +187,9 @@ jobs:
                 dist/solar-ctl-image.bmap
           cp -L "$IMAGE_DIR/solar-ctl-image-raspberrypi0-wifi.rootfs.manifest" \
                 dist/solar-ctl-image.manifest
+          # NB the stable .swu symlink keeps the ".rootfs" infix (IMAGE_LINK_NAME).
+          cp -L "$IMAGE_DIR/solar-ctl-swu-raspberrypi0-wifi.rootfs.swu" \
+                dist/solar-ctl-image.swu
           (cd dist && sha256sum solar-ctl-image.* > SHA256SUMS)
           ls -lh dist/
 

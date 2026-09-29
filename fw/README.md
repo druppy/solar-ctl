@@ -11,9 +11,17 @@ with a deliberately minimal image (~120 packages, ~48 MB compressed):
 `kas build fw/kas-rpi0.yml` (plus a throwaway WiFi fragment when the repo
 secrets are set):
 
-- **push/PR to main** — build + `solar-ctl-image-<sha>` artifact (48 MB zip
-  contents: `wic.bz2`, `bmap`, `manifest`, `SHA256SUMS`)
+- **push/PR to main** — build + `solar-ctl-image-<sha>` artifact (`wic.bz2`,
+  `bmap`, `manifest`, signed `.swu`, `SHA256SUMS`)
 - **tag `v*`** — same build, additionally published as a GitHub Release
+- **signing keys** — the build step gets `SOLAR_SWU_PRIVATE_KEY` from the
+  repo secret (the public key is derived from it, never stored separately);
+  an unset secret **fails the build** - the repo ships no fallback keypair,
+  so no build can ever sign with a key someone left in the tree. The job
+  also asserts SWUpdate's merged
+  kconfig (signing on, web UI/lua/scripts/UBOOT/MTD off) from the
+  `${T}/swupdate-merged-dotconfig` snapshot — kconfig drops symbols
+  silently and the file is the only proof of what stuck.
 - **caching**: only `build/sstate-cache` (~1.3 GB) is cached —
   `build/downloads` is ~9.5 GB (8.4 GB of it is `git2` bare clones) and
   GitHub's per-repo cache quota is 10 GB, so caching downloads sat at
@@ -45,17 +53,31 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 
 ## Layout
 
-| Path | Purpose |
-| --- | --- |
-| `kas-rpi0.yml` | **Build this** — repos (wrynose branch tips), machine, WiFi creds, local.conf bits |
-| `conf/layer.conf` | `fw/` is a small meta layer (`solar-ctl`) |
-| `conf/distro/solar-ctl.conf` | Our distro: `TCLIBC=musl`, `INIT_MANAGER=systemd`, lean distro features |
-| `recipes-core/images/solar-ctl-image.bb` | Minimal image (dropbear ssh, WiFi) |
-| `recipes-connectivity/solar-wifi/` | WiFi bring-up: supplicant config + systemd units |
-| `recipes-core/dropbear/` | bbappend: root-only key-only SSH config |
-| `recipes-core/solar-rootkeys/` | `/root/.ssh/authorized_keys` (FIDO sk-key, public half) |
-| `recipes-kernel/linux/` | Kernel config slimming + nv3007/solar-rs485 DT overlays (142×428 panel-mipi-dbi TFT) |
-| `recipes-support/rs485ctl/` | RS485 RTS direction-control setup tool |
+| Path                                     | Purpose                                                                                       |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `kas-rpi0.yml`                           | **Build this** — repos (wrynose branch tips, incl. `meta-swupdate`), machine, WiFi + signing-key env, local.conf bits |
+| `conf/layer.conf`                        | `fw/` is a small meta layer (`solar-ctl`)                                                     |
+| `conf/distro/solar-ctl.conf`             | Our distro: `TCLIBC=musl`, `INIT_MANAGER=systemd`, lean distro features                       |
+| `files/wic/solar-ctl-ab.wks`             | A/B disk layout: p1 vfat + p2/p3 squashfs slots + p4 ext4 `/data`                             |
+| `classes/solar-swu-signing.bbclass`      | `SOLAR_SWU_*_KEY` resolution (content / path; no fallback; public key derived + cross-checked) → SWUpdate signing |
+| `recipes-core/images/solar-ctl-image.bb` | The image (U-Boot A/B layout, SWUpdate agent, RO root + `/etc` overlay)                       |
+| `recipes-core/images/solar-ctl-swu.bb`   | Single signed `.swu` (both slots as `stable,main`/`stable,alt` sets)                          |
+| `recipes-support/swupdate/`              | bbappend + kconfig fragment: minimal swupdate (signing on, web UI/lua/scripts off)            |
+| `recipes-support/solar-swu-agent/`       | On-target glue: `solar-update`, pub key, hwrevision, kernel-seed + progress services          |
+| `recipes-bsp/u-boot/`                    | U-Boot ext4 fragment + pre-seeded `uboot.env` blob                                            |
+| `recipes-connectivity/solar-wifi/`       | WiFi bring-up: supplicant config + systemd units                                              |
+| `recipes-core/dropbear/`                 | bbappend: root-only key-only SSH config                                                       |
+| `recipes-core/solar-rootkeys/`           | `/root/.ssh/authorized_keys` (FIDO sk-key, public half)                                       |
+| `recipes-kernel/linux/`                  | Kernel config slimming + nv3007/solar-rs485 DT overlays (142×428 panel-mipi-dbi TFT)          |
+| `recipes-support/rs485ctl/`              | RS485 RTS direction-control setup tool                                                        |
+| `docs/swupdate-ota.md`                   | **A/B OTA design record** (U-Boot per-slot kernel, squashfs roots, `/etc` overlay, SWUpdate)  |
+| `tools/ota-probe.sh`                     | Read-only on-target probe of boot chain/filesystems (run before OTA work)                     |
+| `tools/swu-keygen.sh`                    | Generate the RSA-4096 `.swu`/FIT signing keypair                                              |
+
+SWUpdate's bbappend lives in `fw/` and is therefore parsed by **every** build —
+that is only legal because `kas-rpi0.yml` adds `meta-swupdate` (a dangling
+`*.bbappend` is a hard bitbake error). Never remove that repo entry without
+moving the bbappend out of `fw/` again.
 
 ## Peripherals & wiring (40-pin header)
 
@@ -301,6 +323,64 @@ Three options:
 3. **Ad-hoc** without editing files: `wpa_cli` (`add_network`, `set_network`,
    `select_network`).
 
+## A/B updates & signing
+
+The image ships the A/B layout (`files/wic/solar-ctl-ab.wks`): p1 vfat (GPU
+firmware, U-Boot, fallback `uImage`, pre-seeded `uboot.env`) + p2/p3
+squashfs-xz root slots + p4 ext4 `/data` holding the `/etc` overlay upper and
+the **per-slot kernels** (`/data/cores/slot-{a,b}/uImage`). U-Boot env `slot=a|b`
+picks the slot; the kernel is loaded from `/data` via `ext4load`, so normal
+updates never write FAT. SWUpdate's U-Boot backend writes `slot` itself (a
+`bootenv` entry in the signed sw-description, flushed only after all images
+installed OK), and the p4 `/data`
+is self-healed at preinit (`e2fsck`, reformat only as last resort). Full
+decision record: [`docs/swupdate-ota.md`](docs/swupdate-ota.md).
+
+Applying an update (on the board):
+
+```sh
+solar-update -i /path/to/solar-ctl-image.swu           # local file, reboots on success
+solar-update -d "-u https://host/solar-ctl-image.swu"  # or pull from a URL
+solar-update -n -i /path/to/solar-ctl-image.swu        # stage only, reboot manually
+```
+
+`solar-update` derives the target from `root=` in `/proc/cmdline` (running on
+p2 → install set `alt`/slot-b and vice versa) and holds `/boot` rw long enough
+for the env write. The reboot is done by `solar-swupdate-progress.service`: it
+watches swupdate's progress socket, logs every update to journald, and on
+SUCCESS runs a gate script that calls `systemctl reboot` (SWUpdate itself never
+reboots). `-n|--no-reboot` plants a one-shot `/run/solar-update/no-reboot` the
+gate consumes instead of rebooting. The
+`.swu` is ONE file for both
+slots (libconfig sets, selected with `-e stable,main|alt`), signed RSA-4096 /
+SHA-256 and verified against `/etc/solar/swupdate.pub.pem`; SWUpdate runs
+on-demand only (its daemon units are stripped from the image; the progress
+service is receive-only, nothing accepts update commands).
+
+**Signing keys** (same policy as WiFi creds — never committed):
+
+```sh
+fw/tools/swu-keygen.sh                      # RSA-4096 (NOT ed25519: SWUpdate
+                                            # and U-Boot FIT have no ed25519;
+                                            # same keypair later signs FIT too)
+# local:  put the private key (PEM content or absolute path) in
+#         .zed/tasks.json env as SOLAR_SWU_PRIVATE_KEY; the public key is
+#         derived (set SOLAR_SWU_PUBLIC_KEY only if you want it cross-checked)
+# CI:     gh secret set SOLAR_SWU_PRIVATE_KEY < private.pem
+```
+
+Without the env var the build **fails** (hard `bb.fatal`) — deliberately: the
+repo ships no keypair of any kind, so a signed artifact can never come from a
+key that merely happened to be committed. Flash a
+milestone card with the usual `bmaptool` procedure (`.wic.bz2` + `.bmap`).
+
+Before touching the layout on older hardware, run the read-only probe and
+keep the output:
+
+```sh
+scp fw/tools/ota-probe.sh root@<board>:/tmp/ && ssh root@<board> sh /tmp/ota-probe.sh
+```
+
 ## Design notes / caveats
 
 - **No poky**: oe-core ships no distro conf, so we provide our own
@@ -312,7 +392,8 @@ Three options:
   glibc-only bits, expect to patch or drop it.
 - **Kernel modules**: meta-raspberrypi pulls *all* ~1800 modules into every
   rpi image; our image recipe removes that and installs only the `brcmfmac`
-  WiFi stack (BCM43430 firmware comes from the machine conf). Add specific
+  stack plus `linux-firmware-rpidistro-bcm43430` (do not rely on the machine
+  conf RRECOMMENDS — the 2026-09-18 image omitted the firmware). Add specific
   `kernel-module-*` packages to `solar-ctl-image.bb` as needed.
 - **bitbake** has no `wrynose` branch; we pin `2.18`, enforced by oe-core's
   sanity checker.

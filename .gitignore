@@ -1,7 +1,12 @@
 .zed
+.lsp
+.clj-kondo
 build/
 kas-build.log
 layers/
 # throwaway CI/local wifi fragment (kas wifi override from secrets)
 .kas-wifi-ci.yml
 .kas-wifi-local.yml
+# output of fw/tools/swu-keygen.sh — real signing keys are NEVER committed
+# (no fallback pair lives in the tree; SOLAR_SWU_PRIVATE_KEY is required)
+swu-keys/

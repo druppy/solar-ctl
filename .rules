@@ -63,6 +63,19 @@
   `${UNPACKDIR}/<file>` paths for `file://` SRC_URI files.
 - A line whose first char is `}` inside a recipe shell/python function breaks
   bitbake's parser (e.g. a `network={...}` heredoc). Use template files + sed.
+- **A dangling `.bbappend` is a hard ERROR on wrynose, not a warning**: any
+  `*.bbappend` in an *active* layer must match a recipe that is also visible.
+  Adding `swupdate_%.bbappend` to `fw/` killed the image build (PR #1) with
+  `ERROR: No recipes in default available for: .../swupdate_%.bbappend`, even
+  though nothing in the image references swupdate. Every layer is parsed by
+  every build. Fix = put such recipes in a layer that only the kas config
+  needing them adds (a separate layer), not in `fw/`. (This was the whole
+  point of the old `fw-swupdate/` gate layer — retired 2026-09-28 now that
+  `fw/kas-rpi0.yml` itself adds meta-swupdate.)
+- In kas, `repos.<id>.layers` is a **mapping** (layer path -> null | disabled
+  | {prio}), so an including config that adds a key ADDS a layer while the rest
+  of the parent entry survives; `target:` on the other hand is a list and gets
+  REPLACED wholesale.
 - `serial-console` is **not** a valid IMAGE_FEATURE on wrynose (it silently
   skips the image recipe). With systemd the serial getty comes automatically
   from `ENABLE_UART=1` + `SERIAL_CONSOLES` (systemd-serialgetty).
@@ -141,6 +154,385 @@
 - `build/tmp/work-shared/raspberrypi0-wifi/kernel-source` survives rm_work
   — grep defconfigs/board DTS/overlays there instead of unpacking anything.
 
+## A/B OTA / SWUpdate (IMPLEMENTED in-tree — full record in fw/docs/swupdate-ota.md)
+- Target: A/B **squashfs-xz** read-only roots + `/etc` overlay + ext4 `/data`;
+  slot switch via **U-Boot env `slot=a|b`** (plan of record since 2026-09-25,
+  bench test 5 PASS). Milestone image validated on bench; signed OTA flow
+  implemented 2026-09-28 and **bench-verified 2026-09-28** (URL install +
+  auto-reboot B→A, `-n` + manual reboot A→B; results in
+  `fw/docs/bench-2026-09-24.md` "OTA update flow verified").
+- **Gate retired** (2026-09-28): `fw/kas-swupdate.yml`, the `fw-swupdate`
+  layer and the parallel CI `swupdate` job are deleted. The bbappend + kconfig
+  fragment now live in `fw/recipes-support/swupdate/` and are only legal there
+  because `fw/kas-rpi0.yml` adds the meta-swupdate repo (dangling-bbappend
+  gotcha). swupdate IS in `IMAGE_INSTALL` (on-demand CLI; its auto-enabled
+  `.service`/`.socket` are deleted by an image postprocess fn).
+  Merged-kconfig asserts (SIGNED_IMAGES/SIGALG_RAWRSA/HASH_VERIFY=y and —
+  since the 2026-09-28 bootloader flip below — UBOOT/BOOTLOADER_DEFAULT_UBOOT/
+  DOWNLOAD/DOWNLOAD_SSL=y; MTD/WEBSERVER/LUA/SCRIPTS/SURICATTA not =y) moved
+  into the main firmware CI job, reading the `${T}/swupdate-merged-dotconfig`
+  snapshot the bbappend still writes (`rm_work` never deletes `temp`).
+- **Signing: RSA-4096, PKCS#1 v1.5, SHA-256 — ed25519 is impossible**
+  (verified against swupdate 2026.05.1 sources + U-Boot FIT: SWUpdate streams
+  `EVP_DigestVerifyUpdate/Final`, OpenSSL ed25519 is one-shot only, `openssl
+  dgst -sign` refuses ed25519, FIT has no ed25519; same keypair is planned to
+  sign FIT images later, which settles it). Keys env-style like WiFi:
+  `SOLAR_SWU_PRIVATE_KEY` = PEM **content** or **absolute host path**
+  (declared in kas `env:`) is REQUIRED — empty ⇒ hard bb.fatal; the repo
+  ships NO fallback keypair (committed dev pair removed 2026-09-28: never
+  let a build silently sign with a key that merely lives in the tree).
+  `SOLAR_SWU_PUBLIC_KEY` optional: derived via `openssl rsa -pubout`
+  (openssl-native depends added in the class) and cross-checked against the
+  private key when also supplied (mismatch = fatal). CI: ONE secret
+  `SOLAR_SWU_PRIVATE_KEY` + an explicit `Require signing key secret` step
+  (fork PRs without secrets fail by design). Real keys:
+  `fw/tools/swu-keygen.sh` → `.zed/tasks.json` env / Actions
+  secret `SOLAR_SWU_PRIVATE_KEY`. Plumbing: `fw/classes/solar-swu-signing.bbclass`
+  (writes `${WORKDIR}/swu-signing/{private,public}.pem` in a task wired via
+  `bb.build.addtask` inside anon-python — plain `addtask ... before
+  do_swuimage` breaks recipes lacking that task, and setting a `before`
+  *flag* by hand does nothing; `do_swuimage[vardeps]`/`do_install[vardeps]`
+  so key rotation re-runs tasks — and since the staged pub key is DERIVED,
+  `do_install[vardeps]` must include `SOLAR_SWU_PRIVATE_KEY`, not just the
+  public one). **vardeps must also be on
+  `do_swu_signing_keys` itself** (hit 2026-09-28 when first real keys went
+  into `.zed/tasks.json`): that task reads the vars via a string-literal
+  variable NAME (`solar_swu_get_key(d, "SOLAR_SWU_...")`), invisible to
+  vartable analysis, so without its own vardeps it replays STALE staged PEMs
+  while `do_swuimage` (vardeps on the var) re-runs and silently re-signs
+  with the old keypair → dev-signed `.swu` vs real-key image, `openssl
+  dgst` verification failure; the tell is the staged
+  `solar-ctl-swu/1.0/swu-signing/*.pem` mtimes lagging the build. Debug
+  recipe (hashes only, never print PEMs): sha256 the key baked in the
+  `solar-swu-agent` RPM (`./etc/solar/swupdate.pub.pem`), the
+  `swu-keys/public.pem`, and `.zed/tasks.json` values (JSON-escaped `\n`
+  must be unescaped; `$ZED_WORKTREE_ROOT` must be expanded — Zed does this
+  itself, `.zed/env-inject.py` does it for terminal builds).
+- **Single .swu, two sets** (`fw/recipes-core/images/solar-ctl-swu.bb` +
+  `files/sw-description`): `stable = { main = p2 + /data/cores/slot-a/uImage;
+  alt = p3 + slot-b }`, chosen at install: `swupdate -i f.swu -e
+  stable,main|alt -k /etc/solar/swupdate.pub.pem`. `/usr/bin/solar-update`
+  (recipe `solar-swu-agent`) ONLY derives the set from `root=` in
+  /proc/cmdline, mkdirs `/data/cores/slot-{a,b}`, holds /boot rw (trap
+  remounts ro on EXIT) and forwards args to swupdate — both `-i f.swu` and
+  `-d "-u https://..."` work (CONFIG_DOWNLOAD+DOWNLOAD_SSL now on; curl+TLS
+  in the image, nothing listens); `-n|--no-reboot` only plants the one-shot
+  `/run/solar-update/no-reboot`. The reboot is done by **our
+  solar-swupdate-progress.service** (same recipe, `swupdate-progress` now in
+  the image): watches the progress socket, logs to journald, on SUCCESS runs
+  `/usr/libexec/solar-swu-reboot` (consumes the marker and stays up, else
+  `exec systemctl reboot` — never raw reboot(2)). Verified in 2026.05.1:
+  **swupdate itself never reboots** — sw-description `reboot = true` only
+  feeds progress/suricatta notifications; the progress server starts on EVERY
+  run (core/swupdate.c:1116 — watcher fires for CLI -i/-d too); `-w` blocks
+  silently until the socket exists; `-r` takes the NEXT WORD as its script
+  (run via system()); socket path follows $RUNTIME_DIRECTORY so the unit must
+  NOT set RuntimeDirectory= (both land on /tmp/swupdateprog); no CLI flag
+  suppresses reboot (-R = no-reinstall) — hence the /run marker. Upstream
+  swupdate-progress.service (in ${PN}-progress) stays inert (WantedBy=
+  swupdate.service, deleted) and would raw-reboot; our own unit wraps the
+  same binary. The
+  `reboot = true` declaration stays in the signed description (stage-3
+  SURICATTA consults it). The ARM is a per-set `bootenv = {name=
+  "slot"; value="a|b"}` entry in sw-description: the parser resolves `bootenv`
+  through the SAME set-path search as `images`, and the U-Boot backend flushes
+  it via libubootenv (/etc/fw_env.config, same target as fw_setenv) ONLY after
+  every image of the set installed (core/installer.c); env-write failure fails
+  the update. NO scripts in the .swu (LUA/SCRIPTS/SHELLHANDLER
+  compiled out — pure-data payload, smaller binary, liblua dropped);
+  hardware-compatibility against `/etc/hwrevision` is LIVE (bench 2026-09-28):
+  the file MUST be two tokens `<boardname> <revision>` (`hw-compatibility.c`
+  `fscanf("%ms %ms")`, needs ret==2; the list matches the SECOND token only) —
+  a lone `1.0` failed every install with "SW not compatible with hardware";
+  we ship `solar-ctl 1.0`. The per-slot kernel image entry MUST be
+  `type = "rawfile"` + `path = ...` (FILE_HANDLER, legal in `images:` —
+  core/parser.c resolves IMAGE|FILE): `raw` open()s `device=` O_RDWR without
+  O_CREAT → "Error streaming uImage" installing into an empty slot dir
+  (bench 2026-09-28). Recipe facts: NOT an image recipe — `inherit
+  swupdate-common solar-swu-signing image-artifact-names` (without the last,
+  IMAGE_NAME/IMAGE_LINK_NAME are unset → dashed filenames), `S = "${UNPACKDIR}"`
+  comes from the class, full entry names in `SWUPDATE_IMAGES` are matched
+  EXACTLY in DEPLOY_DIR_IMAGE (use stable symlinks), `IMAGE_DEPENDS =
+  `IMAGE_DEPENDS = "solar-ctl-image"`, squashfs payload via `IMAGE_FSTYPES += "squashfs-xz"`.
+  **`RM_WORK_EXCLUDE:append = " ${PN}"` is required in this recipe** (hit
+  2026-09-28): `do_swuimage` is sstate-registered by `swupdate-common` but its
+  sstate restore does not bring back UNPACKDIR's `sw-description` or
+  `swu-signing/*.pem`; plain `rm_work` deletes the workdir, so the next
+  no-change build re-ran `do_swuimage` against an empty `${S}`
+  (`FileNotFoundError` in `swupdate_expand_bitbake_variables`, and its
+  `sstate_task_prefunc` had already deleted the deployed `.swu`). Workdir is
+  a few KB. Recovery after the bug bit: `bitbake solar-ctl-swu -c cleansstate`
+  (the promoted setscene unpack stamp must die before unpack re-runs).
+  **Artifact name has a `.rootfs` infix**: `solar-ctl-swu-raspberrypi0-wifi.rootfs.swu`.
+- **sw-description gotchas** (verified by building it): libconfig comments
+  must be `/* */`; the `$fn(...)`/`@@VAR@@` expansion regex scans **every
+  line including comments** — mentioning `$swupdate_get_sha256(...)` in a
+  comment makes do_swuimage try to hash a file named `...`. **`sha256` /
+  `installed-directly` are DIRECT image-entry attributes** in 2026.05.1
+  (`parser/parser.c` `parse_common_attributes`); inside `properties{}` they are
+  an opaque handler-only string dict and the install dies at runtime with
+  "Hash not set for ..." (bench 2026-09-28 — an earlier grep of `sha256 =`
+  matched both layouts and gave a false pass). Values expand at build time
+  from files staged in WORKDIR by the class itself. `do_swuimage` also replayed
+  STALE sstate on sw-description edits (bare `addtask swuimage before do_build`
+  has no hash link to this recipe's own unpack — "task Succeeded" while
+  deploying the old artifact); fixed via
+  `do_swuimage[depends] += "${PN}:do_unpack"`.
+- **Kernel/dtb off p1** (user decision 2026-09-28): per-slot kernels are
+  regular files on ext4 `/data`; boot.scr does `ext4load mmc 0:4
+  ${kernel_addr_r} /cores/slot-${slot}/uImage` (p**4**! not 0:3), falls back
+  to the top-level FAT uImage (factory card before the seed runs).
+  `solar-cores-seed.service` (solar-swu-agent) copies /boot/uImage →
+  slot-a on first boot. U-Boot needs `CONFIG_CMD_EXT4`/`CONFIG_FS_EXT4` via
+  `fw/recipes-bsp/u-boot/u-boot_%.bbappend` + files/solar-ctl.cfg
+  (`u-boot-configure.inc` merges every SRC_URI `*.cfg`). **NO dtb in the
+  .swu**: boot uses the p1 DTB+overlays loaded by start.elf (never OTA'd) →
+  kernels shipped by OTA must stay compatible with the installed dtb.
+- **`uboot.env` must be shipped, libubootenv cannot create it** (bench
+  2026-09-25). `fw/recipes-bsp/u-boot/solar-uboot-env_0.1.bb` deploys a
+  16384-byte blob = 4-byte LE CRC32 + **full u-boot default env + `slot=a\0`**
+  + NUL pad (zlib.crc32 over the remaining bytes). **slot-only blobs are a
+  trap** (hit 2026-09-28 first bench boot of the factory image): U-Boot treats
+  a valid-CRC env as COMPLETE, so bootcmd/bootdelay vanish — autoboot and even
+  `boot` become silent no-ops; recovery is `env default -a` + `env save` from
+  the U-Boot prompt. The recipe therefore merges the deploy artifact
+  `u-boot-initial-env-<machine>-<pv>` (u-boot.inc deploys it as KEY=VALUE
+  text; `do_deploy[depends] += "virtual/bootloader:do_deploy"` is ORDERING
+  only — bitbake can't hash that file, so touch the recipe after a u-boot
+  bump). libubootenv acceptance of the blob format VERIFIED on bench
+  2026-09-28 (`fw_printenv slot` → `slot=a`). Needs `inherit deploy` (that
+  class owns DEPLOYDIR; setting `do_deploy[dirs]="${DEPLOYDIR}"` by hand trips
+  the WORKDIR-pollution guard). Lands on p1 via `IMAGE_BOOT_FILES:append = "
+  uboot.env"` + `DEPENDS += solar-uboot-env`.
+- **Nothing mounts `/boot` automatically** (bench 2026-09-28): the wrynose
+  direct imager writes NO fstab line for the wks `/boot` mountpoint (stock OE
+  fstab ships) — a fresh boot has p1 unmounted, so `fw_printenv` dies with
+  "Cannot initialize environment" and `solar-update`'s
+  `mount -o remount,rw /boot` aborts (`set -e`). Fix = `boot.mount` unit in
+  solar-swu-agent (`What=/dev/disk/by-label/boot`, vfat, `ro`; enabled via
+  `SYSTEMD_SERVICE`). A recipe must NOT `install -d ${D}/boot` (installed-vs-shipped
+  QA; the dir already exists in the base rootfs). Overlay trap while
+  debugging: writing a file directly into the /etc overlay UPPER
+  (`/data/overlay-etc/upper/...`) does not appear through the mounted /etc
+  (cached dentry) — write THROUGH /etc instead.
+- **Journal persists on /data** (bench-verified 2026-09-28): `/var/log` is a
+  symlink to `/data/log` (image postprocess `solar_ab_persist_var_log`), the
+  preinit `mkdir -p /data/log` before PID 1, and solar-swu-agent ships
+  `/etc/systemd/journald.conf.d/10-solar-ctl.conf` (`Storage=persistent`,
+  `SystemMaxUse=32M` + `SystemMaxFileSize=8M` — the caps are the SD-wear
+  bound; lower them for long-term production). Keeps the journal off the
+  512 MB tmpfs and alive across reboots: after an OTA flip,
+  `journalctl -b -1 -u solar-swupdate-progress` shows the *previous* boot's
+  update (bench: boots -1/0 listed). Preinit-failure note: if /data never
+  mounts, the link is dangling and journald falls back to /run.
+- **/data (p4) self-heal in the overlayfs-etc preinit**: image ships its own
+  `OVERLAYFS_ETC_INIT_TEMPLATE` (`files/solar-overlayfs-etc-preinit.sh.in`):
+  mount → e2fsck -y → mkfs.ext4 -F last resort; boot never blocks. **Trap:**
+  the class renders the template with python `str.format()` — any literal
+  `{`/`}` (even in comments, and shell-function braces) breaks do_rootfs;
+  the upstream template is brace-free for exactly this reason.
+- **SWUpdate update state was a trap with `BOOTLOADER_NONE`** (void for our
+  config 2026-09-28: U-Boot backend is selected now, so those calls persist —
+  kept as knowledge, NONE is still compiled in): the "Update Status
+  Storage" choice has exactly ONE option (`UPDATE_STATE_CHOICE_BOOTLOADER`,
+  which `depends on ... || BOOTLOADER_NONE || ...`), so it is force-enabled and
+  there is no file-based option to pick. `bootloader/none.c` implements the env
+  on a `static struct dict` = **RAM only, returns success, gone at reboot**. So
+  `ustate`/`swupdate-env`/`bootstate=`/`set_bootloader_state` silently persist
+  nothing → keep all boot-state bookkeeping in `/data` yourself.
+  **Escape hatch (verified in swupdate 2026.05.1 sources, no C needed):**
+  `CONFIG_BOOTLOADER_GRUB=y` is a *file-backed* env and `GRUBENV_PATH` is a
+  **Kconfig string**, not hardcoded — point it at ext4 `/data` and those calls
+  really persist. Costs: the file must be **exactly 1024 bytes** with the
+  `# GRUB Environment Block\n` header (pre-create it; writes go via
+  `grubenv.new`+rename, so same-fs only), and it reports "grub" on a board with
+  no GRUB. **Trap:** the `choice "Default Bootloader Interface"` has no `default`
+  statement, so making GRUB *visible* silently flips the default off `none`
+  (GRUB precedes NONE in the choice) — pin `BOOTLOADER_DEFAULT_NONE` explicitly.
+- `overlayfs-etc.bbclass` (oe-core) is the `/etc` mechanism, BUT its default
+  `OVERLAYFS_ETC_CREATE_MOUNT_DIRS=1` does `mount -o remount,rw /` — on a
+  squashfs root that can never work. Set it to `0` and pre-create `/data`.
+  Also conflicts with IMAGE_FEATURES `package-management`.
+- `overlayfs.bbclass` (for `/var`) requires the **`overlayfs` DISTRO_FEATURE,
+  which is NOT in `DISTRO_FEATURES_DEFAULTS`** in fw/conf/distro/solar-ctl.conf
+  — must be added. The kernel side is already there: `CONFIG_OVERLAY_FS=m`,
+  `CONFIG_SQUASHFS=m` (+`SQUASHFS_XZ=y`) in `bcmrpi_defconfig` (verified
+  2026-09-24 in work-shared, kernel 6.18.33) — the image merely lacks the
+  `kernel-module-overlay`/`kernel-module-squashfs` **packages**, not the
+  symbols. It refuses `/etc` by design.
+  `/var/volatile` for RO rootfs is initscripts-only → systemd never runs it.
+- Slot switching: `tryboot` is the mechanism — firmware sets a one-shot flag,
+  clears it, and loads `tryboot.txt` **instead of** `config.txt`. Kernel side
+  verified (`drivers/firmware/raspberrypi.c` parses `reboot="0 tryboot"` →
+  `RPI_FIRMWARE_SET_REBOOT_FLAGS`, binds on bcm2835-firmware). Arm with
+  `echo '0 tryboot' > /run/systemd/reboot-param && systemctl reboot` (systemd>=254).
+  `autoboot.txt`/`tryboot_a_b` exists but legacy start.elf support is untested.
+  Nothing decrements a boot counter (tryboot is consumed pre-kernel) → rely on
+  `panic=N` + per-slot `slot=A|B` cmdline token, not a bootcount.
+- meta-swupdate has a `wrynose` branch; layer is at the **repo root** (kas entry
+  needs no `layers:` key), `LAYERDEPENDS_swupdate = "openembedded-layer"` (we
+  carry meta-oe). Recipes: `swupdate.inc` + `swupdate_2025.12/2026.05.1/git.bb`
+  sharing one `swupdate/defconfig`; default provider = 2026.05.1. Configured by
+  **its own Kconfig**, no PACKAGECONFIG: `swupdate.inc` inherits `cml1`, so
+  **any `*.cfg` in SRC_URI is a config fragment** — do_configure concatenates
+  flags + `defconfig` + `find_cfgs()` (every SRC_URI `*.cfg`) then
+  `merge_config.sh -m` (last wins) + `olddefconfig`. Ours:
+  `fw/recipes-support/swupdate/swupdate/solar-ctl.cfg`.
+  DEPENDS are computed by an anon python in `swupdate.inc` over the **text of
+  defconfig overlaid with every SRC_URI `*.cfg`** (regex
+  `^(?:# )?(CONFIG_*)[= ]`), not the merged `.config` — so `CONFIG_DOWNLOAD=y`
+  in our fragment really adds `curl` (mapping: `DOWNLOAD`|`SURICATTA`→curl,
+  `UBOOT`→libubootenv DEPENDS **+ RDEPENDS**, `SSL_IMPL_OPENSSL`→openssl...).
+  **Parse-cache trap (hit 2026-09-28):** that python reads the fragment files
+  directly, outside bitbake's parse-cache file tracking — editing
+  `solar-ctl.cfg` on a warm cache yields a STALE parse (old DEPENDS) plus the
+  "metadata is not deterministic" basehash errors, and the task then runs with
+  an old sysroot (symptom: `channel_curl.c: fatal error: curl/curl.h` while
+  `bitbake -e swupdate` *now* shows curl in DEPENDS). Fix: `rm -rf build/cache`
+  (full re-parse; sstate untouched) before the next build after a fragment
+  edit — warm runs can otherwise replay the stale basehash (the same
+  X→Y `not deterministic` error recurs across several warm builds until one
+  cold run settles the cache; CI is immune, its `build/cache` is always cold).
+  And the fragment regex
+  accepts `# CONFIG_FOO is not set`, so that form really removes a base `y` and
+  its DEPENDS. Trap: `HAVE_*` are `option env=` symbols probed from the sysroot
+  by SWUpdate's own Makefile, so **olddefconfig silently drops** any symbol with
+  an unmet `depends on HAVE_*` — never trust "the fragment was applied", read
+  the merged `.config` (CI dumps it). `CURL`/`CURL_SSL` are **hidden** (only via
+  `SURICATTA`/`DOWNLOAD*`). `libubootenv`/`libconfig`/`json-c` are unconditional
+  DEPENDS. Shipped defconfig is wrong for us: `SURICATTA`/`CURL`/
+  `SIGNED_IMAGES`/`HASH_VERIFY` all off (note: `CONFIG_UBOOT=y` — the shipped
+  `y` was right for us ALL ALONG only since 2026-09-28; we previously turned it
+  off because swupdate must not touch the env while fw_setenv owned it — now
+  swupdate IS the env writer, see the single-.swu bullet). Hawkbit =
+  just `CONFIG_SURICATTA=y` (+CURL_SSL) — a config, not a protocol to implement.
+  No RPi bootloader handler exists (`none/ebg/uboot/grub/cboot` only; and
+  `BOOTLOADER_NONE` is `default y`) → `bootloader_transaction_marker=false;
+  bootloader_state_marker=false;` stay (as per-set properties — default true
+  would add p1 FAT writes per install) but the switch is done by the `bootenv`
+  section via the U-Boot backend; no `dual_copy` property — standby slot is
+  our job.
+  **Choice trap (verified 2026-09-28, bootloader/Kconfig):** the `choice
+  "Default Bootloader Interface"` has no `default` statement and UBOOT precedes
+  NONE — `CONFIG_UBOOT=y` alone silently flips the default; pin
+  `CONFIG_BOOTLOADER_DEFAULT_UBOOT=y`. **Handler trap (bench 2026-09-28, first
+  solar-update run):** the `bootenv`/`uboot` IMAGE HANDLERS the parser resolves
+  are a SEPARATE switch — `CONFIG_BOOTLOADERHANDLER=y` (handlers/boot_handler.c,
+  default n); with only the backend built, every install dies in the parser:
+  "bootloader support absent but sw-description has bootloader section!". CI
+  asserts both. Related edge: if the on-disk env cannot
+  be opened, `uboot.c` loads `UBOOT_DEFAULTENV` (/etc/u-boot-initial-env) and a
+  later `env_store()` OVERWRITES uboot.env with it; that file is deliberately
+  absent from our image so this path errors instead (libubootenv0 +
+  libubootenv-bin + u-boot-env/fw_env.config already ship — needed anyway).
+  `installed-directly=true` is **mandatory on 512 MB** (else it extracts to
+  tmpfs /tmp). `swupdate-www/-client/-ipc/-lua/-progress/-tools/-usb` are
+  packages of `swupdate`. The layer also ships **bbclasses** —
+  `swupdate-image.bbclass` (`.swu` straight from an image recipe +
+  `file://sw-description`) on `swupdate-common.bbclass` (`do_swuimage`,
+  `SWUPDATE_IMAGES*`, `SWUPDATE_SIGNING` ⇒ `cpio-native`/`openssl-native`,
+  `S = "${UNPACKDIR}"`, signs with `openssl dgst -sha256 -sign`, requires
+  `SWUPDATE_PRIVATE_KEY` to EXIST at task time) — this IS the route used
+  since 2026-09-28 (via solar-ctl-swu.bb; swupdate-image.bbclass itself is
+  NOT inherited — it injects its own image).
+- **`wic` moved OUT of oe-core** (verified 2026-09-23: no `scripts/lib/wic`
+  on wrynose or master). It is a standalone project consumed as a recipe:
+  `meta/recipes-support/wic/wic_0.3.1.bb` → `git://git.yoctoproject.org/wic.git`
+  tag v0.3.1, built as `wic-native`. Consequences: canned wks now live in
+  **`<layer>/files/wic/`** (so ours goes in `fw/files/wic/`); `image_types_wic`
+  gained an `IMAGER=direct` abstraction; plugin source (rawcopy) is only
+  greppable locally in `build/downloads/git2/git.yoctoproject.org.wic.git`
+  (real path **`src/wic/plugins/source/rawcopy.py`**, not `lib/wic/…`).
+  `bitbake wic-native -c fetch` **PASSED 2026-09-24** — smart-HTTPS git works
+  even though Cloudflare still 403s the cgit **web** UI; if it ever fails to
+  fetch, mirror wic.git to GitHub and override SRC_URI in a bbappend.
+- Hazards: `/etc` overlay upper is **shared by both slots and survives
+  rollback** (factory reset = wipe the upper dir; app config belongs in
+  `/data`); **never OTA `bootcode.bin`/`start.elf`** (corrupt GPU firmware =
+  truck roll); keep p1 FAT writes rare; MSDOS table + ext4 **fs labels**
+  (`/dev/disk/by-label/`), since `by-partlabel` needs GPT.
+- Bootloader version check: `bitbake -e rpi-bootfiles | grep -E
+  '^(PV|SRCREV|RPIFW_DATE)='` (PV=`${RPIFW_DATE}`), or the
+  `rpi-bootfiles-<PV>.stamp` in the deploy dir; `vcgencmd version` needs
+  libraspberrypi-bin (not installed). Bench probe: `fw/tools/ota-probe.sh`.
+- **No runtime firmware updater exists in this stack** (verified 2026-09-24
+  against meta-raspberrypi `wrynose`): there is **no `rpi-update` recipe** (no
+  matching path, and a layer-scoped code search returns zero hits — the tool
+  lives upstream in `Hexxeh/rpi-update`, unpackaged). Boot files come from
+  `rpi-bootfiles`, which pins `raspberrypi/firmware` to a SRCREV
+  (`RPIFW_DATE ?= "20250801"`) and deploys them at build time; `rpi-eeprom`
+  exists but its COMPATIBLE_MACHINE is only raspberrypi4, raspberrypi4-64 and
+  raspberrypi5 (a Zero W has no EEPROM). Consequence for A/B: a firmware fix is a
+  `rpi-bootfiles` bump + rebuild + **supervised p1 maintenance op on the bench**,
+  never an OTA path — p1 is shared by both slots, so no slot switch can carry a
+  firmware change, and rewriting `start.elf`/`bootcode.bin` in place is the one
+  brick-capable action here (doc §9).
+- **An RPi bootloader backend for SWUpdate is feasible but deferred** (doc §6.6):
+  `doc/source/bootloader_interface.rst` documents the extension point (4 patch
+  points: `bootloader/rpi.c` + a `BOOTLOADER_*` define in `include/bootloader.h`
+  + Kconfig entry and a `BOOTLOADER_DEFAULT_*` choice entry + one `obj-` line);
+  backends are keyed by **string**, not enum, and `core/bootloader.c` skips
+  entries whose `funcs` is NULL. Why not worth it: the interface is a key/value
+  env and **the Pi has no such thing** (boot choice = which file the firmware
+  reads + a one-shot flag), `env_get` cannot read tryboot back (no getter, only
+  `SET_REBOOT_FLAGS`), and per-variable `env_set` means FAT writes on p1. Note
+  `bootloader_interface.rst`'s supported list is **stale** (omits `cboot`).
+  Revisit trigger: stage-3 `SURICATTA`/Hawkbit boot-state reporting.
+- **GRUB is an env store, not a bootloader here** (doc §6.6): `start.elf` on
+  BCM2835 cannot load GRUB and `BOOTLOADER_GRUB` does NOT switch slots — it only
+  backs the key/value env with a file so the state calls persist. Plan of record
+  stays `BOOTLOADER_NONE` + bookkeeping in `/data`.
+- **U-Boot is the plan of record for per-slot kernels** (doc §5): wrynose
+  `RPI_USE_U_BOOT=1` deploys `u-boot.bin` as `kernel.img` (`rpi_0_w_defconfig`).
+  `RPI_USE_U_BOOT=1` + `ENABLE_UART=0` is a hard `bbfatal`; we **keep**
+  `ENABLE_UART=1` (already on). UART vs RS485 is hardware: split MAX485 DE
+  (GPIO17, pulldown) from /RE (pull-up) so the chip is deaf+mute until Linux;
+  production `boot.scr` uses `bootdelay=-2`. Never OTA `u-boot.bin`/`start.elf`.
+  Stock `rpi-u-boot-scr` has no A/B — we write `boot.cmd`. Env + `bootcount` live
+  on ext4 `/data`, not FAT. Layout: p1 vfat (GPU+U-Boot + `slot-a/`/`slot-b/`
+  kernels) + p2/p3 squashfs-xz roots + p4 `/data`. Smoke-verified 2026-09-25:
+  U-Boot 2026.01 (musl) boots Linux via the stock `boot.scr` — `bootcmd=
+  bootflow scan`, `bootdelay=2`, prompt `U-Boot>`, banner→kernel ~6 s; an
+  input byte inside the 2 s window interrupts autoboot (board waits at the
+  prompt, not bricked).
+- **Bench protocol is doc §8** (tests 0–5, each with commands + what decision it
+  flips + a re-evaluation matrix), not a 4-row table any more. Key property:
+  `tryboot` is consumed pre-kernel, so a wrong answer **reboots back to
+  `config.txt` by itself** — nothing can brick the board, and nothing can be
+  verified *before* the reboot (evidence = `/proc/cmdline` + serial log after).
+  Fallback if `start.elf` won't vary the cmdline per boot is **not** rewriting
+  `cmdline.txt` (every boot needs it → corrupt = truck roll) but a small
+  **initramfs** that picks the slot from a marker on `/data` and `switch_root`s
+  by ext4 label. `ota-probe.sh` is strictly read-only, busybox-ash safe
+  (validated with `busybox sh` + `busybox awk`), and takes `OTA_PROBE_BOOT=<dir>`
+  to inspect a card in a bench reader.
+- **Bench 2026-09-24 (retested same day; `fw/docs/bench-2026-09-24.md`, firmware
+  20250801):** 1a PASS (11 s vs 6 s), 1b FAIL (`cmdline=` ignored), 1c FAIL
+  (`kernel=` ignored) → classic Tier 1 dead. Test 2 PASS: `autoboot.txt` is
+  parsed; channel is `/chosen/bootloader/partition` (1 unarmed → 9 armed),
+  not `partnum`. Bogus p9 self-heals same boot. Tier 2 live but landing on a
+  second FAT unproven. Plan of record after 1c + MAX485 isolation: **U-Boot +
+  per-slot kernel** (Tier 1-alt remains the no-second-stage fallback). Test 3 PASS (FAT marker
+  survives power pull). Test 4 ≈10/21 MB/s. Bugs: no WiFi firmware in image;
+  root never resized (135 MB on 122 GB). Serial: CH341 `/dev/ttyUSB0` (FT232R
+  dead). Do not OTA `bootcode.bin`/`start.elf`.
+- **Bench test 5 PASS (2026-09-25, milestone image `20260925194720`):** U-Boot +
+  per-slot kernel A/B layout validated end-to-end — squashfs root on p2, `/etc`
+  overlay upper on `/data` (edit survives reboot AND slot switch = §9 hazard
+  confirmed), A→B→A flip via `mount -o remount,rw /boot; fw_setenv slot b|a;
+  mount -o remount,ro /boot; reboot` (cmdline shows p3/p2 accordingly). Two
+  gotchas: (1) **root on squashfs needs `CONFIG_SQUASHFS=y`** —
+  bcmrpi_defconfig has `=m` and with no initramfs the kernel panics `VFS:
+  Unable to mount root fs on unknown-block(179,2)`; fixed in
+  `solar-ctl-slim.cfg` (the `kernel-module-squashfs` package then ceases to
+  exist — don't `IMAGE_INSTALL` it); `overlay.ko` staying `=m` is fine (loaded
+  from the mounted root). (2) **libubootenv cannot create `/boot/uboot.env`**
+  ("Cannot initialize environment") — it must pre-exist at exactly
+  `CONFIG_ENV_SIZE` (16 KiB): seed once with `dd` zeros + `fw_setenv -s
+  defenv.txt`; step 5 should ship the blob via `IMAGE_BOOT_FILES`. systemd
+  self-overlays `/var/{cache,lib,spool}` on tmpfs — works on a RO root, no
+  `overlayfs.bbclass` needed.
+
 ## Editor on target
 - Use **busybox `vi`** — decided 2026-09 after evaluating classic nvi 1.81.6:
   it fails to build on wrynose's GCC (2003-era code calls `conv_init`/`conv_enc`
@@ -150,8 +542,14 @@
   compat185 bbappend for `dbopen()`. Not worth it for a Zero W image.
 
 ## Device facts
-- Zero W WiFi/BT chip: BCM43430 (firmware `linux-firmware-rpidistro-bcm43430`
-  comes from the machine conf; driver `brcmfmac` installed in the image).
+- Zero W WiFi/BT chip: BCM43430. `IMAGE_INSTALL` needs **both**
+  `linux-firmware-rpidistro-bcm43430` (the machine-conf RRECOMMENDS did not
+  land it in the 2026-09-18 image) **and** `kernel-module-brcmfmac-cyw`:
+  kernel 6.18 brcmfmac runtime-`request_module()`s the vendor firmware
+  plugin per chip (cyw/bca/wcc); the name is built at runtime in
+  `fwvid.c`, so modpost records no softdep ⇒ the package is never
+  auto-installed; without it `modprobe brcmfmac-cyw` fails and there is no
+  `wlan0` (seen 2026-09-25). Driver `brcmfmac`.
 - Console: UART 115200 8N1; image has dropbear but **root has no password**
   by default (set via serial `passwd`, or lab-only `empty-root-password`).
 - SSH policy: `/etc/default/dropbear` (our `dropbear.default` via the

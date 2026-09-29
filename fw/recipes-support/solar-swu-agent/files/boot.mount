@@ -1,0 +1,16 @@
+[Unit]
+Description=Mount the vfat boot partition (U-Boot env + GPU firmware)
+# /etc/fw_env.config points at /boot/uboot.env, so fw_printenv/fw_setenv and
+# SWUpdate's bootenv flush all need p1 mounted. The wks mountpoint is dead
+# weight: wrynose's direct imager writes no fstab line (bench 2026-09-28,
+# fresh slot-B boot had /boot unmounted -> "Cannot initialize environment").
+# p1 stays ro; solar-update remounts rw around the install.
+
+[Mount]
+What=/dev/disk/by-label/boot
+Where=/boot
+Type=vfat
+Options=ro
+
+[Install]
+WantedBy=local-fs.target
