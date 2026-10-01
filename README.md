@@ -32,8 +32,9 @@ private FW, build it locally and make your own key pair (`fw/tools/swu-keygen.sh
 
 Also, there is no disk encryption and no secure boot in the current version, it should be doable and later this may be added.
 
-## TFT Display 
+## TFT Display
 
-- 2.79 Inch 142×428 
-- Chip NV3007 TFT LCD Display Module 
-- Should work directly with RPi
+- 2.79 Inch 142×428
+- Chip NV3007 TFT LCD Display Module (Aliexpress: "TZT 142×428 Resolution 8 Pin SPI Full Color Screen Panel")
+- Works directly off the RPi header at 3.3 V: SPI0 (SCI→GPIO11, SDA→GPIO10, CS→GPIO8) plus RES/DC/BL on GPIO24/25/18 — full pin-by-pin wiring in [fw/README.md](fw/README.md#nv3007-279-tft-142428-spi-enabled-by-default)
+- Driven by the in-kernel `panel-mipi-dbi` driver via our `nv3007` DT overlay; the panel stays dark until the vendor NV3007 init-sequence firmware file is baked into the image (fw/README.md explains the format and how to test a blob on the run).

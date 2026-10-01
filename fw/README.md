@@ -129,23 +129,25 @@ flowchart LR
 
 ### NV3007 2.79" TFT (142×428 SPI, enabled by default)
 
-TZT 2.79" 142×428 SPI display with the NV3007 controller. It is driven
+TZT 2.79" 142×428 SPI display with the NV3007 controller (AliExpress:
+"2.79 Inch NV3007 TFT LCD Display Module TZT 142×428 Resolution 8 Pin
+SPI Full Color Screen Panel"). It is driven
 by the generic in-kernel `panel-mipi-dbi` driver (not `ili9341` — that
 one hardcodes 240×320) via our `nv3007` overlay, which is **on** in
 `config.txt`. The resolution comes from the overlay's `panel-timing`
 node; the controller init sequence comes from a firmware file, see
-below:
+below. The module's 8-pin header, numbered 1→8 next to the pads:
 
-| display pin | GPIO | physical pin | overlay override |
-| --- | --- | --- | --- |
-| MOSI (SDA) | GPIO10 | P1-19 | — |
-| SCLK (SCK) | GPIO11 | P1-23 | — |
-| CS  | GPIO8 | P1-24 | — |
-| DC  | GPIO25 | P1-22 | `dc_pin=<n>` |
-| RST | GPIO24 | P1-18 | `reset_pin=<n>` |
-| BLK | GPIO18 | P1-12 | `led_pin=<n>` (0 = tie to 3V3) |
-| VCC | — | 3V3 (P1-01/17) | — |
-| GND | — | P1-06/09/14/20/25/30/34/39 | — |
+| # | display pin | RPi signal | GPIO | RPi header | overlay override |
+| --- | --- | --- | --- | --- | --- |
+| 1 | GND | ground | — | P1-06/09/14/20/25/30/34/39 | — |
+| 2 | VDD | 3.3 V | — | 3V3 (P1-01/17) | — |
+| 3 | SCI | SPI clock (SCLK) | GPIO11 | P1-23 | — |
+| 4 | SDA | SPI MOSI | GPIO10 | P1-19 | — |
+| 5 | RES | reset | GPIO24 | P1-18 | `reset_pin=<n>` |
+| 6 | DC | data/command | GPIO25 | P1-22 | `dc_pin=<n>` |
+| 7 | CS | SPI CE0 | GPIO8 | P1-24 | — |
+| 8 | BL | backlight | GPIO18 | P1-12 | `led_pin=<n>` (0 = tie to 3V3) |
 
 Runs at 3.3 V — do not feed 5 V into data lines unless your module
 board is explicitly 5 V-tolerant. Backlight is driven from GPIO18 via
