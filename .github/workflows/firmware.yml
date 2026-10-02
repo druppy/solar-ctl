@@ -24,8 +24,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      actions: read
-      checks: write # dorny/test-reporter publishes a check run
+      actions: write # dorny/test-reporter posts the report to this job's summary
     steps:
       - uses: actions/checkout@v7
 
@@ -52,17 +51,17 @@ jobs:
           [ -x build-tests/inv_ctl_tests ] && \
             ./build-tests/inv_ctl_tests --reporter Junit --out inv-ctl-junit.xml || true
 
-      - name: Publish report to checks GUI
+      # Report lands in THIS job's summary (badge + per-case table, shown on
+      # the run summary page) - a check-run report would be a second row in
+      # the checks list, which would duplicate the inv-ctl job.
+      - name: Publish report to job summary
         if: ${{ !cancelled() && hashFiles('inv-ctl-junit.xml') != '' }}
         uses: dorny/test-reporter@v3
         with:
           name: inv_ctl unit tests
           path: inv-ctl-junit.xml
           reporter: java-junit
-          # v3 defaults to 'true' = report goes ONLY into the job summary and
-          # NO named check run is created. Force the check run so the report
-          # appears as its own entry in the PR checks list.
-          use-actions-summary: false
+          use-actions-summary: true
           fail-on-error: false # display only; ctest is the gate
 
   fw:
