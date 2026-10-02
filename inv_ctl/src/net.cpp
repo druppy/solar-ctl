@@ -36,28 +36,26 @@ std::string query_ssid(const char * ifname)
     return ssid;
 }
 
-/* /proc/net/wireless line format (net/wireless/wext-proc.c):
- *   "%-8s: "  status  link_quality  level(dBm)  noise(dBm) ...
- * The name column is space-padded BEFORE the colon and the link-quality
- * column can print as a slash pair ("44/70"), so parse token-wise: trim
- * the name, skip status and quality, take level as the third token.
- * Do NOT read the status column for link state: mac80211 drivers
- * (brcmfmac included) leave it at 0000 even when fully associated
- * (bench 2026-10-02: UI said "no link" while iw said Connected); it is
- * only ever filled by a few legacy ad-hoc drivers. query_carrier() is
- * the authoritative link indicator. */
-bool query_signal(const char * ifname, int & dbm)
+/* /proc/net/wireless (net/wireless/wext-proc.c). Bench-captured bytes on
+ * kernel 6.18 + brcmfmac (od -c), iface line:
+ *     " wlan0: 0000   43.  -67.  -256        0 ...\n"
+ * i.e. a LEADING space, the iface token, ':' (older kernels space-pad the
+ * name column to width 8 — trim the name at BOTH ends either way), then
+ * status / link-quality / level(dBm) / noise. Traps, all fixed 2026-10-02
+ * after the glass reported them:
+ *   - the link-quality column may print as a slash pair ("44/70");
+ *   - the level prints WITH a trailing dot ("-66.") — strtod eats it;
+ *     invalid markers ("--", "99/99") must be rejected;
+ *   - the status token is 0000 for ALL mac80211 drivers (brcmfmac
+ *     included) even when fully associated — it is a legacy ad-hoc-only
+ *     field, never use it for link state; query_carrier() is the
+ *     authoritative link indicator.
+ * Pure parse over an open stream so unit tests can feed captured bytes. */
+bool parse_wext(FILE * f, const char * ifname, int & dbm)
 {
-    FILE * f = std::fopen("/proc/net/wireless", "re");
-    if (!f)
-        return false;
-
     bool found = false;
     char line[256];
     while (std::fgets(line, sizeof(line), f)) {
-        /* wext-proc prints the name as " %-8s:": LEADING space AND
-         * trailing padding — trim BOTH ends before strcmp, or the line
-         * never matches and the panel shows 0 dBm (bench 2026-10-02). */
         char * name = line;
         while (*name && std::isspace(static_cast<unsigned char>(*name)))
             ++name;
@@ -81,6 +79,15 @@ bool query_signal(const char * ifname, int & dbm)
         dbm = static_cast<int>(level);
         found = true;
     }
+    return found;
+}
+
+bool query_signal(const char * ifname, int & dbm)
+{
+    FILE * f = std::fopen("/proc/net/wireless", "re");
+    if (!f)
+        return false;
+    const bool found = parse_wext(f, ifname, dbm);
     std::fclose(f);
     return found;
 }
@@ -88,6 +95,14 @@ bool query_signal(const char * ifname, int & dbm)
 /* cfg80211 drives carrier on association, so /sys/.../carrier is 1 exactly
  * when associated. Reading it while the iface is down fails with EINVAL,
  * which is simply "no link". */
+bool parse_carrier(FILE * f)
+{
+    int carrier = 0;
+    if (std::fscanf(f, "%d", &carrier) != 1)
+        carrier = 0;
+    return carrier == 1;
+}
+
 bool query_carrier(const char * ifname)
 {
     char path[128];
@@ -95,11 +110,9 @@ bool query_carrier(const char * ifname)
     FILE * f = std::fopen(path, "re");
     if (!f)
         return false;
-    int carrier = 0;
-    if (std::fscanf(f, "%d", &carrier) != 1)
-        carrier = 0;
+    const bool linked = parse_carrier(f);
     std::fclose(f);
-    return carrier == 1;
+    return linked;
 }
 
 std::string query_ipv4(const char * ifname)
