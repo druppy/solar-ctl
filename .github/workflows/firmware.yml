@@ -149,13 +149,23 @@ jobs:
       # gate job - but a green build does NOT prove our kconfig fragment
       # applied (olddefconfig silently drops symbols whose HAVE_<lib> probe
       # failed). The bbappend snapshots the merged .config into ${T}; rm_work
-      # never deletes `temp`.
+      # never deletes `temp`. Caveat (hit 2026-10-02, runs 36853440890/
+      # 37002108982): on a WARM sstate cache do_configure is a setscene task,
+      # no workdir/temp is ever created and the snapshot legitimately does
+      # not exist - so if missing, force one cheap real do_configure; the
+      # assert must not depend on cache temperature.
       - name: Verify swupdate merged kconfig
         run: |
           mapfile -t cfgs < <(find build/tmp/work -type f -name swupdate-merged-dotconfig | sort -u)
           if [ "${#cfgs[@]}" -eq 0 ]; then
-            echo "::error::no swupdate-merged-dotconfig under build/tmp/work - swupdate did not run do_configure?"
-            exit 1
+            echo "no snapshot: swupdate was sstate-restored - forcing do_configure"
+            kas shell -c "bitbake swupdate -c configure -f" \
+              fw/kas-rpi0.yml${KAS_WIFI_FRAGMENT:+:$KAS_WIFI_FRAGMENT}
+            mapfile -t cfgs < <(find build/tmp/work -type f -name swupdate-merged-dotconfig | sort -u)
+            if [ "${#cfgs[@]}" -eq 0 ]; then
+              echo "::error::still no swupdate-merged-dotconfig after forced do_configure"
+              exit 1
+            fi
           fi
           fail=0
           for cfg in "${cfgs[@]}"; do

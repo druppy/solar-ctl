@@ -215,6 +215,12 @@
   DOWNLOAD/DOWNLOAD_SSL=y; MTD/WEBSERVER/LUA/SCRIPTS/SURICATTA not =y) moved
   into the main firmware CI job, reading the `${T}/swupdate-merged-dotconfig`
   snapshot the bbappend still writes (`rm_work` never deletes `temp`).
+  **Warm-cache trap (hit 2026-10-02, runs 36853440890/37002108982):** when
+  swupdate's `do_configure` comes from sstate it is a setscene task — no
+  workdir/temp is created at all, so the snapshot legitimately doesn't exist
+  and the assert failed on a PR that touched nothing swupdate-related. The
+  CI step now falls back to `kas shell -c "bitbake swupdate -c configure -f"`
+  before asserting: a kconfig check must not depend on cache temperature.
 - **Signing: RSA-4096, PKCS#1 v1.5, SHA-256 — ed25519 is impossible**
   (verified against swupdate 2026.05.1 sources + U-Boot FIT: SWUpdate streams
   `EVP_DigestVerifyUpdate/Final`, OpenSSL ed25519 is one-shot only, `openssl
@@ -642,6 +648,18 @@
   padding sits BEFORE the colon, so `"%63[^:]:"` captures `wlan0   `
   (padded) and the strcmp silently fails (UI showed `--`); the link
   column can print as "44/70". net.cpp `query_signal` parses token-wise.
+  Second trap same column set (fixed 2026-10-02, OTA'd same day): the
+  wext **status** token is `0000` for ALL mac80211 drivers (brcmfmac
+  included) even when fully associated — legacy ad-hoc-only field — so
+  linked must come from `/sys/class/net/<if>/carrier` (`query_carrier`),
+  never `atoi(status)` (UI showed "WiFi: no link" while `iw` said
+  Connected). Also level prints WITH trailing dot ("-66.") — strtod
+  eats it; "99/99"/"--" markers still rejected. Third trap same line
+  (fixed + OTA'd 2026-10-02): wext-proc emits `" %-8s:"` — there is a
+  LEADING space before the iface name too; trimming only the
+  pre-colon padding leaves " wlan0", strcmp never matches and the UI
+  shows `WiFi: 0 dBm` (linked=1 via carrier, level=0 via the
+  query_signal failure zeroing it). Trim BOTH ends.
 - Bench serial quirks: the default console is the **mini-UART** — it eats
   chars on lines >~60; wake with `\r`, flush with `\025\003`, never type
   3.4 KB base64 lines (wget over LAN instead). CH341 dongle drops off
