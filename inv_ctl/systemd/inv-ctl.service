@@ -1,0 +1,14 @@
+[Unit]
+Description=solar-ctl inverter controller UI
+Documentation=https://github.com/druppy/solar-ctl
+# /dev/fb0 appears only after the SPI panel probe (and its init firmware);
+# inv-ctl itself retries until the device shows up.
+After=local-fs.target
+
+[Service]
+ExecStart=/usr/bin/inv-ctl --backend fb --fb /dev/fb0
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

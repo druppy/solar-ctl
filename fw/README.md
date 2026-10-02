@@ -57,7 +57,7 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 
 | Path                                     | Purpose                                                                                       |
 | ---------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `kas-rpi0.yml`                           | **Build this** — repos (wrynose branch tips, incl. `meta-swupdate`), machine, WiFi + signing-key env, local.conf bits |
+| `kas-rpi0.yml`                           | **Build this** — repos (wrynose branch tips, incl. `meta-swupdate`), machine, WiFi + signing-key + SSH-pubkey env, local.conf bits |
 | `conf/layer.conf`                        | `fw/` is a small meta layer (`solar-ctl`)                                                     |
 | `conf/distro/solar-ctl.conf`             | Our distro: `TCLIBC=musl`, `INIT_MANAGER=systemd`, lean distro features                       |
 | `files/wic/solar-ctl-ab.wks`             | A/B disk layout: p1 vfat + p2/p3 squashfs slots + p4 ext4 `/data`                             |
@@ -69,12 +69,17 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 | `recipes-bsp/u-boot/`                    | U-Boot ext4 fragment + pre-seeded `uboot.env` blob                                            |
 | `recipes-connectivity/solar-wifi/`       | WiFi bring-up: supplicant config + systemd units                                              |
 | `recipes-core/dropbear/`                 | bbappend: root-only key-only SSH config                                                       |
-| `recipes-core/solar-rootkeys/`           | `/root/.ssh/authorized_keys` (FIDO sk-key, public half)                                       |
+| `recipes-core/solar-rootkeys/`           | `/root/.ssh/authorized_keys` baked from `SOLAR_SSH_PUBLIC_KEY` (public half)                 |
 | `recipes-kernel/linux/`                  | Kernel config slimming + nv3007/solar-rs485 DT overlays (142×428 panel-mipi-dbi TFT)          |
 | `recipes-support/rs485ctl/`              | RS485 RTS direction-control setup tool                                                        |
+| `recipes-support/solar-panel-fw/`         | `/lib/firmware/panel-mipi-dbi-spi.bin` — NV3007 init sequence for panel-mipi-dbi             |
+| `recipes-apps/inv-ctl/`                  | LVGL UI app built from repo-root `inv_ctl/` (fbdev backend, `inv-ctl.service`)                |
 | `docs/swupdate-ota.md`                   | **A/B OTA design record** (U-Boot per-slot kernel, squashfs roots, `/etc` overlay, SWUpdate)  |
+| `docs/ab-boot-uboot.md`                  | **Current U-Boot + A/B setup** (layout, boot chain, slot switch, update flow, traps)          |
+| `docs/display-nv3007.md`                 | **Display bring-up story** (panel-mipi-dbi traps, firmware blob, GRAM offset, fbcon)          |
 | `tools/ota-probe.sh`                     | Read-only on-target probe of boot chain/filesystems (run before OTA work)                     |
 | `tools/swu-keygen.sh`                    | Generate the RSA-4096 `.swu`/FIT signing keypair                                              |
+| `tools/lvgl-nv3007-to-mipi-dbi.py`       | Generate the panel firmware blob from LVGL's nv3007 driver (re-run on LVGL bumps)             |
 
 SWUpdate's bbappend lives in `fw/` and is therefore parsed by **every** build —
 that is only legal because `kas-rpi0.yml` adds `meta-swupdate` (a dangling
@@ -129,28 +134,41 @@ flowchart LR
 
 ### NV3007 2.79" TFT (142×428 SPI, enabled by default)
 
-TZT 2.79" 142×428 SPI display with the NV3007 controller. It is driven
+TZT 2.79" 142×428 SPI display with the NV3007 controller (AliExpress:
+"2.79 Inch NV3007 TFT LCD Display Module TZT 142×428 Resolution 8 Pin
+SPI Full Color Screen Panel"). It is driven
 by the generic in-kernel `panel-mipi-dbi` driver (not `ili9341` — that
 one hardcodes 240×320) via our `nv3007` overlay, which is **on** in
 `config.txt`. The resolution comes from the overlay's `panel-timing`
 node; the controller init sequence comes from a firmware file, see
-below:
+below. The module's 8-pin header, numbered 1→8 next to the pads:
 
-| display pin | GPIO | physical pin | overlay override |
-| --- | --- | --- | --- |
-| MOSI (SDA) | GPIO10 | P1-19 | — |
-| SCLK (SCK) | GPIO11 | P1-23 | — |
-| CS  | GPIO8 | P1-24 | — |
-| DC  | GPIO25 | P1-22 | `dc_pin=<n>` |
-| RST | GPIO24 | P1-18 | `reset_pin=<n>` |
-| BLK | GPIO18 | P1-12 | `led_pin=<n>` (0 = tie to 3V3) |
-| VCC | — | 3V3 (P1-01/17) | — |
-| GND | — | P1-06/09/14/20/25/30/34/39 | — |
+| # | display pin | RPi signal | GPIO | RPi header | overlay override |
+| --- | --- | --- | --- | --- | --- |
+| 1 | GND | ground | — | P1-06/09/14/20/25/30/34/39 | — |
+| 2 | VDD | 3.3 V | — | 3V3 (P1-01/17) | — |
+| 3 | SCI | SPI clock (SCLK) | GPIO11 | P1-23 | — |
+| 4 | SDA | SPI MOSI | GPIO10 | P1-19 | — |
+| 5 | RES | reset | GPIO24 | P1-18 | `reset_pin=<n>` |
+| 6 | DC | data/command | GPIO25 | P1-22 | `dc_pin=<n>` |
+| 7 | CS | SPI CE0 | GPIO8 | P1-24 | — |
+| 8 | BL | backlight | GPIO18 | P1-12 | `led_pin=<n>` (0 = tie to 3V3) |
 
 Runs at 3.3 V — do not feed 5 V into data lines unless your module
 board is explicitly 5 V-tolerant. Backlight is driven from GPIO18 via
 `gpio-backlight` (on at boot); wiring BLK straight to 3V3 also works —
 the GPIO then just toggles a disconnected pin.
+
+**GRAM offset & SPI speed:** this TZT module's visible window starts at
+GRAM x=14; the overlay's `panel-timing` encodes that as
+`hback-porch = <14>` (`vback-porch = <0>`). Without the offset a band of
+stale pixels shows in one column — the bench ruler pattern is flush at
+both ends with kx=14/ky=0. All other `panel-timing` props must stay 0
+(nonzero hsync/vsync lens or front porches → probe fails with
+"panel-timing out of bounds"), and `width-mm`/`height-mm` are mandatory
+(0/0 legal). `spi-max-frequency` defaults to 16 MHz (panel spec 32 MHz);
+lower it on long flying leads if the glass shows pixel noise — the bench
+setup ran `dtoverlay=nv3007,speed=2000000`.
 
 **Init-sequence firmware (panel stays dark without it):**
 `panel-mipi-dbi` has no built-in NV3007 init code; at probe it requests
@@ -158,17 +176,18 @@ the GPIO then just toggles a disconnected pin.
 compatible string). The file is the vendor init sequence in the
 `mipi_dbi_commands` blob format documented in
 `drivers/gpu/drm/tiny/panel-mipi-dbi.c` (command/length/payload
-records, version 1; delays encoded as NOP commands). It is **not**
-yet baked into the image — until it is, the driver logs
-`No config file found for compatible 'panel-mipi-dbi-spi'` and the
-backlight comes on but the panel stays blank. To test with a blob
-handy: `scp blob root@<host>:/lib/firmware/panel-mipi-dbi-spi.bin`
-— the driver retries `request_firmware()` every minute, no reboot
-needed.
+records, version 1; delays encoded as NOP commands). It ships in the
+image via the `solar-panel-fw` recipe — generated (never hand-edited)
+by `fw/tools/lvgl-nv3007-to-mipi-dbi.py` from LVGL 9.4's in-tree NV3007
+init list; re-run it with `--dump` when bumping LVGL. Without the file
+the driver logs `No config file found for compatible
+'panel-mipi-dbi-spi'` (backlight on, panel blank) and retries
+`request_firmware()` every minute, so dropping a blob into
+`/lib/firmware/` lights the panel without a reboot.
 
 Check after boot: `dmesg | grep -iE "mipi-dbi|panel|fb0"`, then
 `fbset -info` (expect 142×428) and a pixel smoke test:
-`dd if=/dev/urandom of=/dev/fb0 bs=1024 count=119`.
+`dd if=/dev/urandom of=/dev/fb0 bs=121552 count=1` (142×428 RGB565).
 
 **Orientation:** the panel is portrait 142×428 and `panel-mipi-dbi`
 has no DT `rotation` property (unlike the old ili9341 overlay). For a
@@ -296,21 +315,29 @@ Fallback without `bmaptool`: `bzcat <image>.wic.bz2 | sudo dd of=/dev/sdX bs=4M 
   Check with `ip addr show wlan0` (from serial).
 - **SSH — root-only, key-only**: dropbear runs with `-s` (password logins
   disabled; root key login allowed — OE's default `-w` would lock root out
-  entirely), and `/root/.ssh/authorized_keys` from the
-  `solar-rootkeys` recipe holds the maintainer's FIDO security key
-  (`sk-ssh-ed25519`). No other account has a key or usable password, so
-  root-with-key is the only way in:
+  entirely), and `/root/.ssh/authorized_keys` is baked by the
+  `solar-rootkeys` recipe from the `SOLAR_SSH_PUBLIC_KEY` build variable
+  (declared in `fw/kas-rpi0.yml` `env:`, set like `SOLAR_WIFI_*` — in the
+  `.zed/tasks.json` "Build FW" env block or a local kas fragment; several
+  public keys separated by `\n`, or an absolute path to a pub key file
+  (same content-or-path convention as `SOLAR_SWU_*`; `$HOME/...` is NOT
+  expanded anywhere — Zed task env does not do it and the recipe won't
+  compensate). No other account has a key or usable
+  password, so root-with-key is the only way in:
 
   ```sh
-  ssh -i ~/.ssh/id_ed25519_sk root@<board>   # touch the security key when prompted
+  ssh -i ~/.ssh/id_ed25519 root@<board>
   ```
 
-  Adding/removing people = adding/removing public key lines in
-  `recipes-core/solar-rootkeys/solar-rootkeys/root_authorized_keys`
-  (public keys only — safe to commit). Rebuild and reflash, or append
-  directly to `/root/.ssh/authorized_keys` on the target for a quick
-  change. Note: dropbear ≥ 2025.x verifies sk-* keys natively
-  (`DROPBEAR_SK_KEYS`, on by default) — no libfido2 on the target.
+  Public keys only — the private half must never enter a build. Unset =
+  no `authorized_keys` file exists at all (the CI default): with `-s`,
+  SSH logins become flatly impossible — deliberate policy: this repo
+  contains NO keys at all, no key = no access (serial console unaffected).
+  Prefer plain ed25519/RSA keys: FIDO `sk-*` keys verify natively on
+  dropbear ≥ 2025.x (`DROPBEAR_SK_KEYS`, on by default, no libfido2) but
+  demand a touch on **every** connection. `/root` sits on the read-only
+  squashfs root — authorized_keys cannot be appended on a running target;
+  changing it means a rebuild.
 
 ## Changing WiFi later
 

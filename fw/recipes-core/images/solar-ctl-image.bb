@@ -68,16 +68,19 @@ IMAGE_INSTALL:append = " \
 # NV3007 2.79" TFT (dtoverlay=nv3007): generic panel-mipi-dbi driver +
 # SPI host + GPIO backlight. Remaining deps (drm-mipi-dbi, kms helpers,
 # fbdev emulation) come via the kernel module packages' own RDEPENDS.
-# NOTE: the panel only comes up once the NV3007 init sequence is present
-# as /lib/firmware/panel-mipi-dbi-spi.bin (vendor init code - see README).
+# solar-panel-fw bakes /lib/firmware/panel-mipi-dbi-spi.bin, the init
+# sequence the driver request_firmware()s by compatible name (without it,
+# the panel probe defers forever and /dev/fb0 never appears).
 IMAGE_INSTALL:append = " \
     kernel-module-panel-mipi-dbi \
     kernel-module-spi-bcm2835 \
     kernel-module-gpio-backlight \
+    solar-panel-fw \
 "
 
-# Placeholder for the inverter controller app once it lands:
-# IMAGE_INSTALL:append = " inv-ctl"
+# Inverter controller UI (inv_ctl/): LVGL + glibmm, fbdev on /dev/fb0,
+# started as inv-ctl.service.
+IMAGE_INSTALL:append = " inv-ctl"
 
 # --- A/B OTA milestone (doc swupdate-ota.md §5, §10 step 4) ---------------
 # Layout: p1 vfat (GPU fw + U-Boot + per-slot kernel) + p2/p3 squashfs-xz

@@ -18,7 +18,53 @@ env:
   IMAGE_DIR: build/tmp/deploy/images/raspberrypi0-wifi
 
 jobs:
-  build:
+  # Fast native unit tests (inv_ctl), independent of the firmware build.
+  inv-ctl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write # dorny/test-reporter posts the report to this job's summary
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install host deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build
+
+      # UI OFF: no glibmm/SDL2/LVGL needed - net.cpp is pure libc + syscalls.
+      - name: Configure (tests only)
+        run: cmake -S inv_ctl -B build-tests -G Ninja -DINV_CTL_BUILD_UI=OFF -DINV_CTL_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build tests
+        run: cmake --build build-tests --target inv_ctl_tests
+
+      - name: ctest
+        run: ctest --test-dir build-tests --output-on-failure
+
+      # ctest emits no XML (catch_discover_tests only registers cases), so run
+      # the binary once more with Catch2's own JUnit reporter. Test failures
+      # here are NOT the gate - the ctest step above already failed the job;
+      # this only produces the report, hence '|| true'.
+      - name: JUnit XML
+        if: ${{ !cancelled() }}
+        run: |
+          [ -x build-tests/inv_ctl_tests ] && \
+            ./build-tests/inv_ctl_tests --reporter Junit --out inv-ctl-junit.xml || true
+
+      # Report lands in THIS job's summary (badge + per-case table, shown on
+      # the run summary page) - a check-run report would be a second row in
+      # the checks list, which would duplicate the inv-ctl job.
+      - name: Publish report to job summary
+        if: ${{ !cancelled() && hashFiles('inv-ctl-junit.xml') != '' }}
+        uses: dorny/test-reporter@v3
+        with:
+          name: inv_ctl unit tests
+          path: inv-ctl-junit.xml
+          reporter: java-junit
+          use-actions-summary: true
+          fail-on-error: false # display only; ctest is the gate
+
+  fw:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     permissions:
@@ -149,13 +195,23 @@ jobs:
       # gate job - but a green build does NOT prove our kconfig fragment
       # applied (olddefconfig silently drops symbols whose HAVE_<lib> probe
       # failed). The bbappend snapshots the merged .config into ${T}; rm_work
-      # never deletes `temp`.
+      # never deletes `temp`. Caveat (hit 2026-10-02, runs 36853440890/
+      # 37002108982): on a WARM sstate cache do_configure is a setscene task,
+      # no workdir/temp is ever created and the snapshot legitimately does
+      # not exist - so if missing, force one cheap real do_configure; the
+      # assert must not depend on cache temperature.
       - name: Verify swupdate merged kconfig
         run: |
           mapfile -t cfgs < <(find build/tmp/work -type f -name swupdate-merged-dotconfig | sort -u)
           if [ "${#cfgs[@]}" -eq 0 ]; then
-            echo "::error::no swupdate-merged-dotconfig under build/tmp/work - swupdate did not run do_configure?"
-            exit 1
+            echo "no snapshot: swupdate was sstate-restored - forcing do_configure"
+            kas shell -c "bitbake swupdate -c configure -f" \
+              fw/kas-rpi0.yml${KAS_WIFI_FRAGMENT:+:$KAS_WIFI_FRAGMENT}
+            mapfile -t cfgs < <(find build/tmp/work -type f -name swupdate-merged-dotconfig | sort -u)
+            if [ "${#cfgs[@]}" -eq 0 ]; then
+              echo "::error::still no swupdate-merged-dotconfig after forced do_configure"
+              exit 1
+            fi
           fi
           fail=0
           for cfg in "${cfgs[@]}"; do

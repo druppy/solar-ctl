@@ -2,6 +2,8 @@
 .lsp
 .clj-kondo
 build/
+# inv_ctl native/test build dirs (kas uses the root build/ only)
+inv_ctl/build*/
 kas-build.log
 layers/
 # throwaway CI/local wifi fragment (kas wifi override from secrets)

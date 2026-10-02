@@ -9,6 +9,12 @@ Wants=network.target
 Type=simple
 ExecStartPre=/usr/sbin/ip link set wlan0 up
 ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-wlan0.conf -iwlan0 -O /run/wpa_supplicant
+# brcmfmac defaults WiFi power-save ON, which wrecks latency for larger
+# packets (observed as multi-second SSH KEX stalls). wpa_supplicant 2.11
+# in this build rejects the 'ps' network field, so switch it off via
+# iw; the wdev flag persists over wpa re-assocations. Never fail the
+# unit over this cosmetic setting.
+ExecStartPost=/bin/sh -c 'i=0; while [ $i -lt 5 ]; do iw dev wlan0 set power_save off && exit 0; i=$((i+1)); sleep 2; done; exit 0'
 Restart=on-failure
 RestartSec=5
 
