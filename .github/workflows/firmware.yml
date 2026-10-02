@@ -22,6 +22,10 @@ jobs:
   unit-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      checks: write # dorny/test-reporter publishes a check run
     steps:
       - uses: actions/checkout@v7
 
@@ -37,6 +41,25 @@ jobs:
 
       - name: ctest
         run: ctest --test-dir build-tests --output-on-failure
+
+      # ctest emits no XML (catch_discover_tests only registers cases), so run
+      # the binary once more with Catch2's own JUnit reporter. Test failures
+      # here are NOT the gate - the ctest step above already failed the job;
+      # this only produces the report, hence '|| true'.
+      - name: JUnit XML
+        if: ${{ !cancelled() }}
+        run: |
+          [ -x build-tests/inv_ctl_tests ] && \
+            ./build-tests/inv_ctl_tests --reporter Junit --out inv-ctl-junit.xml || true
+
+      - name: Publish report to checks GUI
+        if: ${{ !cancelled() && hashFiles('inv-ctl-junit.xml') != '' }}
+        uses: dorny/test-reporter@v3
+        with:
+          name: inv_ctl unit tests
+          path: inv-ctl-junit.xml
+          reporter: java-junit
+          fail-on-error: false # display only; ctest is the gate
 
   build:
     runs-on: ubuntu-24.04
