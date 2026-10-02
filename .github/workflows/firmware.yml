@@ -19,7 +19,7 @@ env:
 
 jobs:
   # Fast native unit tests (inv_ctl), independent of the firmware build.
-  unit-tests:
+  inv-ctl:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -59,9 +59,13 @@ jobs:
           name: inv_ctl unit tests
           path: inv-ctl-junit.xml
           reporter: java-junit
+          # v3 defaults to 'true' = report goes ONLY into the job summary and
+          # NO named check run is created. Force the check run so the report
+          # appears as its own entry in the PR checks list.
+          use-actions-summary: false
           fail-on-error: false # display only; ctest is the gate
 
-  build:
+  fw:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     permissions:
