@@ -7,10 +7,10 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <regex>
 
 #include <linux/wireless.h>
 
@@ -53,30 +53,25 @@ std::string query_ssid(const char * ifname)
  * Pure parse over an open stream so unit tests can feed captured bytes. */
 bool parse_wext(FILE * f, const char * ifname, int & dbm)
 {
+    /* One line, readable: optional leading space, iface name, ':' (older
+     * kernels pad the name column to width 8), then status and quality
+     * tokens - skipped blind - then the level: a signed integer with an
+     * OPTIONAL trailing dot (brcmfmac prints "-67."). The (?:\s|$) tail is
+     * load-bearing: it is what rejects the invalid markers ("--", "99/99")
+     * AND a malformed "-67..", because the level token must end exactly at
+     * whitespace or end-of-line. Status is never inspected: mac80211
+     * drivers leave it at 0000 even when associated (query_carrier() is
+     * the link indicator). */
+    static const std::regex line_re(
+        R"(^\s*([^:\s]+)\s*:\s*\S+\s+\S+\s+(-?[0-9]+\.?)(?:\s|$))");
+
     bool found = false;
     char line[256];
     while (std::fgets(line, sizeof(line), f)) {
-        char * name = line;
-        while (*name && std::isspace(static_cast<unsigned char>(*name)))
-            ++name;
-        char * sep = std::strchr(name, ':');
-        if (!sep)
-            continue;
-        char * end = sep;
-        while (end > name && std::isspace(static_cast<unsigned char>(end[-1])))
-            --end;
-        *end = '\0';
-        if (std::strcmp(name, ifname) != 0)
-            continue;
-
-        char tok_level[32] = {};
-        if (std::sscanf(sep + 1, "%*31s %*31s %31s", tok_level) != 1)
-            continue;
-        char * endp = nullptr;
-        const double level = std::strtod(tok_level, &endp);
-        if (endp == tok_level || *endp != '\0')
-            continue; // invalid marker ("99/99", "--"), not a plain number
-        dbm = static_cast<int>(level);
+        std::cmatch m; // cmatch, not smatch: raw char* line, not std::string
+        if (!std::regex_search(line, m, line_re) || m[1].str() != ifname)
+            continue; // header row, other iface, or level not a plain number
+        dbm = static_cast<int>(std::strtol(m[2].str().c_str(), nullptr, 10));
         found = true;
     }
     return found;

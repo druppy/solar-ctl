@@ -123,7 +123,22 @@ TEST_CASE("parse_wext: invalid level markers are rejected")
     {
         CHECK_FALSE(parse(" wlan0: 0000   99/99  99/99  -256\n", "wlan0", dbm));
     }
+    SECTION("double trailing dot is garbage, not a number")
+    {
+        CHECK_FALSE(parse(" wlan0: 0000   43.  -67..  -256\n", "wlan0", dbm));
+    }
+    SECTION("level token missing entirely (short line)")
+    {
+        CHECK_FALSE(parse(" wlan0: 0000   43.\n", "wlan0", dbm));
+    }
     CHECK(dbm == 12345); // output untouched on rejection
+}
+
+TEST_CASE("parse_wext: level without trailing dot also parses")
+{
+    int dbm = 0;
+    REQUIRE(parse(" wlan0: 0000   70  -55  -256\n", "wlan0", dbm));
+    CHECK(dbm == -55);
 }
 
 TEST_CASE("parse_wext: degenerate input")
