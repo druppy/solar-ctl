@@ -1,0 +1,42 @@
+Provenance of panel-mipi-dbi-spi.bin
+=====================================
+
+Purpose: NV3007 display-controller init sequence for the TZT 2.79" 142x428
+IPS module, encoded as the firmware blob the kernel panel-mipi-dbi driver
+requests by compatible name (see drivers/gpu/drm/tiny/panel-mipi-dbi.c,
+kernel 6.18.33: magic "MIPI DBI" + 7 NUL, u8 version 1, then
+command/num_params/params records; NOP+1 param = delay in ms).
+
+Generated (do not edit the .bin by hand) with:
+
+    python3 fw/tools/lvgl-nv3007-to-mipi-dbi.py \
+        --src inv_ctl/build/_deps/lvgl-src/src/drivers/display/nv3007/lv_nv3007.c \
+        -o fw/recipes-support/solar-panel-fw/files/panel-mipi-dbi-spi.bin
+
+Source: LVGL v9.4.0 (tag c016f72d4c125098287be5e83c0f1abed4706ee5, same
+SRCREV as meta-oe's lvgl recipe), src/drivers/display/nv3007/lv_nv3007.c,
+whose init list is itself "based on ArduinoGFX NV3007 driver".
+Note: LVGL delays are in 10 ms units (lv_lcd_generic_mipi_send_cmd_list),
+so the post-SLPOUT delay converts to 220 ms.
+
+SPDX-License-Identifier: MIT
+
+MIT License (LVGL project):
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

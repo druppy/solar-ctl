@@ -4,8 +4,10 @@
 - solar-ctl: RPi-based controller for a **Deye inverter** (modbus), publishing to
   Home Assistant energy. Display: 2.79" NV3007 TFT.
 - `fw/` — Yocto **kas** firmware build (this is the active part).
-- `inv_ctl/` — empty for now; the inverter-controller app. Will be added to the
-  image as an `inv-ctl` recipe (placeholder comment in `solar-ctl-image.bb`).
+- `inv_ctl/` — the inverter-controller app (C++23, glibmm main loop + LVGL
+  9.4): SDL2 on laptop, fbdev on target; built into the image as the
+  `inv-ctl` recipe (`fw/recipes-apps/inv-ctl/`), started via
+  `inv-ctl.service`. See `inv_ctl/README.md`.
 - Target board: **Raspberry Pi Zero W** (`machine: raspberrypi0-wifi`).
 
 ## Firmware build (fw/)
@@ -65,6 +67,26 @@
   the real home PSK, into CI artifacts/releases. CI has a guard step that
   fails the build if any of these secret-bearing files ever get tracked by
   git (firmware.yml "Guard against committed secret files").
+- `SOLAR_SSH_PUBLIC_KEY` (kas `env:`, declared 2026-10-02) is baked into
+  `/root/.ssh/authorized_keys` by `solar-rootkeys` (python do_install;
+  one public key per line, real or literal `\n` separated, OR an ABSOLUTE
+  host path — same resolver convention as `solar_swu_get_key` in
+  solar-swu-signing.bbclass; helper `solar_ssh_get_keys`); unset =
+  bb.warn and **no authorized_keys baked** — user policy 2026-10-02:
+  **no keys in the repo at all, no key = no SSH access** (the old
+  committed `root_authorized_keys` sk-key fallback is deleted; CI builds
+  ship keyless images; serial console stays). Value is
+  key CONTENT or an absolute path — never `$HOME/...`: Zed task env does
+  NOT shell-expand, and the recipe rejects it loudly rather than
+  compensating for the Zed bug (use /home/... or fix tasks.json/Zed).
+  Public
+  half only — safe in any env/secret store, unlike WiFi/swu secrets.
+  `.zed/env-inject.py`'s regex must list the var
+  (`SOLAR_(WIFI|SWU|SSH)_...`) or tasks.json silently ignores it.
+  `do_install[vardeps]` pins it (read by NAME inside python = invisible
+  to vartable hashing — the do_swu_signing_keys stale-task trap again).
+  **/root is on the read-only squashfs: authorized_keys is
+  rebuild-only — it cannot be appended on a running target.**
 
 ## Yocto/wrynose recipe gotchas (learned the hard way)
 - `S = "${WORKDIR}"` is rejected on wrynose — use `S = "${UNPACKDIR}"` and
@@ -117,6 +139,12 @@
   `fw/recipes-kernel/linux/files/solar-ctl-slim.cfg` (kernel-yocto applies
   `file://*.cfg` from SRC_URI automatically; linux-raspberrypi DOES require
   linux-yocto.inc). Keep `CONFIG_DRM=y`+`DRM_FBDEV_EMULATION=y`+`DRM_PANEL_MIPI_DBI`.
+  **`# CONFIG_FRAMEBUFFER_CONSOLE is not set`** (added 2026-10-02): fbcon
+  otherwise binds the VT to /dev/fb0 and prints boot text + login prompt
+  onto the TFT beside the LVGL UI. `DRM_FBDEV_EMULATION` does NOT select
+  it, so /dev/fb0 survives for inv-ctl; kernel text stays on the
+  mini-UART console. Makes the manual
+  `echo 0 > /sys/class/vtconsole/vtcon1/bind` hack unnecessary.
 - Custom DTBOs: drop `.dts` in `fw/recipes-kernel/linux/files/`, copy to
   `${S}/arch/arm/boot/dts/overlays/` in `do_configure:append` (bbappend),
   append to `RPI_KERNEL_DEVICETREE_OVERLAYS` **in kas local_conf_header**
@@ -137,12 +165,19 @@
   portrait** module, not a 240×320 ILI9341 — use the generic
   `panel-mipi-dbi` driver (`compatible = "panel-mipi-dbi-spi"`;
   `CONFIG_DRM_PANEL_MIPI_DBI=m` already in bcmrpi_defconfig). Mode comes
-  from a `panel-timing` child node in the overlay (hactive/vactive +
-  porches; blank/unspecified props = 0 is accepted). The controller init
-  sequence is a **firmware file** `/lib/firmware/panel-mipi-dbi-spi.bin`
-  (= compatible[0] + ".bin"; request_firmware, retried ~every 60s) — we
-  do NOT ship it yet, so the panel stays dark until the vendor init code
-  is baked in; never fabricate NV3007 register values. mipi-dbi has no
+  from a `panel-timing` child node in the overlay; binding reality
+  (bench-verified 2026-10-02, kernel 6.18): `width-mm`/`height-mm` are
+  REQUIRED (missing → probe -EINVAL; 0/0 = "unknown size" is legal) and
+  EVERY timing prop must be 0 EXCEPT hactive/vactive and the back-porches
+  — nonzero hsync/vsync lens or front porches → "panel-timing out of
+  bounds", probe -EINVAL. The back-porches double as the GRAM x/y offset
+  of the visible window: this TZT module needs `hback-porch = <14>`
+  (GRAM kx=14, else a stale-pixel column band; ky=0 — ruler pattern
+  flush both ends). The controller init sequence is a **firmware file**
+  `/lib/firmware/panel-mipi-dbi-spi.bin` (= compatible[0] + ".bin";
+  request_firmware, retried ~every 60s) — shipped by `solar-panel-fw`
+  and bench-verified lighting the glass 2026-10-02; never fabricate
+  NV3007 register values. mipi-dbi has no
   DT `rotation`; rotate in software. `TINYDRM_ILI9341` is now disabled
   in the slim fragment. Modules: kernel-module-{panel-mipi-dbi,spi-bcm2835,gpio-backlight}.
 - Zero W UART reality (corrected 2026-09): rpi DT names `uart0`=PL011
@@ -162,7 +197,7 @@
 - `build/tmp/work-shared/raspberrypi0-wifi/kernel-source` survives rm_work
   — grep defconfigs/board DTS/overlays there instead of unpacking anything.
 
-## A/B OTA / SWUpdate (IMPLEMENTED in-tree — full record in fw/docs/swupdate-ota.md)
+## A/B OTA / SWUpdate (IMPLEMENTED in-tree — full record in fw/docs/swupdate-ota.md; current-state summary in fw/docs/ab-boot-uboot.md)
 - Target: A/B **squashfs-xz** read-only roots + `/etc` overlay + ext4 `/data`;
   slot switch via **U-Boot env `slot=a|b`** (plan of record since 2026-09-25,
   bench test 5 PASS). Milestone image validated on bench; signed OTA flow
@@ -540,6 +575,86 @@
   defenv.txt`; step 5 should ship the blob via `IMAGE_BOOT_FILES`. systemd
   self-overlays `/var/{cache,lib,spool}` on tmpfs — works on a RO root, no
   `overlayfs.bbclass` needed.
+
+## inv_ctl app (added 2026-10-01, bench verified 2026-10-02)
+- Repo-root `inv_ctl/` is a standalone CMake project; Yocto recipe
+  `fw/recipes-apps/inv-ctl/inv-ctl_0.1.bb` (filename = PN = `inv-ctl`, which
+  IMAGE_INSTALL + SYSTEMD_SERVICE must match). Backends compile-gated:
+  SDL2 (native, FetchContent lvgl pinned to meta-oe's SRCREV) vs
+  `lv_linux_fbdev_*` (target); `--backend sdl|fb`, `--fb DEVICE`; the fb
+  backend retries forever until /dev/fb0 exists (panel probe + init-fw delay).
+- SRC_URI plumbing for the repo-root app dir (validated 2026-10-01): in a
+  `.bb`, `${LAYERDIR}` inside FILESEXTRAPATHS stays LITERAL (it is a
+  layer.conf variable) and absolute `file://` SRC_URIs path-preserve under
+  UNPACKDIR (destsuffix ignored for dirs). Working recipe:
+  `FILESEXTRAPATHS:prepend := "${@os.path.abspath('${THISDIR}/../../..')}:"`
+  + `SRC_URI = "file://inv_ctl"` + `S = "${UNPACKDIR}/inv_ctl"`.
+- `PACKAGECONFIG:pn-lvgl = "fbdev"` in the distro conf (meta-oe default is
+  `drm` → wrong driver). Despite `LV_USE_EVDEV` the packaged liblvgl.so
+  auto-shlibs to libc/musl only (raw evdev ioctls) — no libevdev runtime
+  dep in the image (verified via pkgdata FILERDEPENDS).
+- Packaged lvgl ships no pkg-config/cmake files: app CMake finds it via
+  `find_path(lvgl.h, PATH_SUFFIXES lvgl)` + `find_library(lvgl)`; the
+  -dev tree at /usr/include/lvgl/ carries the Kconfig-expanded lv_conf.h
+  next to lvgl.h, auto-detected by `__has_include` in lv_conf_internal.h.
+  Native parity build: lv_conf.h overrides via -D defines work (all
+  defaults are `#ifndef`-guarded); LVGL 9.4 cmake needs
+  CONFIG_LV_BUILD_{DEMOS,EXAMPLES}=OFF cache vars.
+- glibmm 2.88 API reality: `Glib::signal_unix_signal` is GONE (use GLib's
+  `g_unix_signal_add`); `OptionGroup::add_entry` takes
+  `(OptionEntry, Glib::ustring&)` — no string-triple convenience form.
+- Display blocker RESOLVED 2026-10-01 and **bench-verified 2026-10-02**: the
+  NV3007 init sequence now ships as `/lib/firmware/panel-mipi-dbi-spi.bin`
+  (recipe `solar-panel-fw`, fw/recipes-support/solar-panel-fw). Blob is
+  generated, never hand-edited, by `fw/tools/lvgl-nv3007-to-mipi-dbi.py`,
+  which parses LVGL 9.4's in-tree NV3007 driver
+  (`src/drivers/display/nv3007/lv_nv3007.c` — its init list is itself based
+  on Arduino_GFX) straight to the kernel firmware-bin format. Re-run the
+  tool with `--dump` and review when bumping LVGL. Firmware format
+  (authoritative: `drivers/gpu/drm/tiny/panel-mipi-dbi.c`, kernel 6.18.33):
+  magic `"MIPI DBI"`+7 NUL, u8 version=1, then `cmd,num_params,params…`;
+  a delay is NOP `0x00,0x01,<ms>`. Two gotchas: (1) LVGL delays are in
+  **10 ms units** (`lv_lcd_generic_mipi_send_cmd_list`), so the post-SLPOUT
+  delay 22 → 220 ms (fits the u8 ms field). (2) The overlay needs
+  `write-only;` — the TZT module's 8-pin header has no MISO, and without it
+  the driver's `mipi_dbi_display_is_on` read can spuriously return "already
+  on" and skip the whole init list. Kernel does HW+soft reset +5 ms before
+  running the list; the LVGL list ends in DISPON. **Bench-verified
+  2026-10-02:** glass lit, ruler pattern flush at both ends, watch UI
+  upright and aligned (IPS panel — no INVON fiddling like the TN ILI9488
+  clones needed). Overlay `spi-max-frequency` default is 16 MHz (panel
+  spec 32 MHz; bench card ran `dtoverlay=nv3007,speed=2000000` on flying
+  leads — pixel noise on glass = too fast, override with `speed=<Hz>`).
+  Bring-up narrative (symptom → cause → fix, one entry per trap): **
+  `fw/docs/display-nv3007.md`**.
+- WiFi power-save: brcmfmac defaults PS **on** → multi-second SSH/KEX
+  stalls (mlkem768-size replies; laptop workaround `ssh -o
+  KexAlgorithms=curve25519-sha256`). wpa_supplicant 2.11 here REJECTS
+  `set_network ps 0` (FAIL — field unsupported; `scan_ssid 1` → OK, so
+  the command itself works, the field is unsupported). Kill it with
+  `iw dev wlan0 set power_save off` — retry loop in
+  solar-wifi.service `ExecStartPost`, `iw` in the recipe RDEPENDS.
+- SSH root key: baked by `solar-rootkeys` from `SOLAR_SSH_PUBLIC_KEY`
+  (see Firmware build env bullet). Use plain ed25519/RSA pubkeys;
+  sk-*/YubiKey pubkeys verify natively but prompt for a touch on EVERY
+  connection (the friction that killed them, 2026-10-02).
+- inv_ctl signal: /proc/net/wireless prints the iface as `%-8s:` — the
+  padding sits BEFORE the colon, so `"%63[^:]:"` captures `wlan0   `
+  (padded) and the strcmp silently fails (UI showed `--`); the link
+  column can print as "44/70". net.cpp `query_signal` parses token-wise.
+- Bench serial quirks: the default console is the **mini-UART** — it eats
+  chars on lines >~60; wake with `\r`, flush with `\025\003`, never type
+  3.4 KB base64 lines (wget over LAN instead). CH341 dongle drops off
+  USB — re-seat when it vanishes. Never pipe a timeout-bound capture
+  through `tail` (buffer lost); redirect to a file. busybox: no
+  `head -4`/`head -c` quirks-free — use `head -n 4` / `dd`.
+- Bench state (2026-10-02, fresh image flashed): glass lit at the image
+  default **16 MHz** with no pixel noise, watch UI upright and aligned;
+  sole defect found = fbcon terminal text on the panel (fix in tree:
+  FRAMEBUFFER_CONSOLE off in solar-ctl-slim.cfg — until that kernel is
+  built+flashed, the runtime workaround is
+  `echo 0 > /sys/class/vtconsole/vtcon1/bind`). /tmp files volatile —
+  re-fetch after each reboot.
 
 ## Editor on target
 - Use **busybox `vi`** — decided 2026-09 after evaluating classic nvi 1.81.6:

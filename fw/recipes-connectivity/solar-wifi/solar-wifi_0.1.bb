@@ -61,5 +61,6 @@ do_install() {
 SYSTEMD_SERVICE:${PN} = "solar-wifi.service solar-wifi-dhcp.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
-RDEPENDS:${PN} = "wpa-supplicant busybox busybox-udhcpc"
+# iw: power-save kill switch (see solar-wifi.service ExecStartPost)
+RDEPENDS:${PN} = "wpa-supplicant busybox busybox-udhcpc iw"
 FILES:${PN} += "${sysconfdir}/wpa_supplicant/wpa_supplicant-wlan0.conf"

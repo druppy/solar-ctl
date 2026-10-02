@@ -23,7 +23,7 @@ target:
 # gitignored) sets them as env vars. CI instead injects them from Actions
 # secrets via the generated .kas-wifi-ci.yml fragment, whose local.conf
 # assignments override the environment. Arbitrary UNdeclared env vars are
-# ignored by kas - only the three names below are passed through.
+# ignored by kas - only the names below are passed through.
 # The recipe's sed uses '|' as delimiter: values must not contain '|'.
 # Generate a hex PSK from a passphrase with:
 #   wpa_passphrase "SSID" 'pass' | sed -n 's/.*psk=//p'
@@ -43,6 +43,22 @@ env:
   # SOLAR_SWU_PRIVATE_KEY, never in git (repo is PUBLIC).
   SOLAR_SWU_PRIVATE_KEY: ""
   SOLAR_SWU_PUBLIC_KEY: ""
+  # Root SSH public key(s) baked into /root/.ssh/authorized_keys by the
+  # solar-rootkeys recipe: key CONTENT (one "type base64 comment" line
+  # per key, several keys separated by '\n') OR an ABSOLUTE host path -
+  # same convention as SOLAR_SWU_* (solar-swu-signing.bbclass). No
+  # '$HOME'/'~' expansion anywhere (Zed task env does not expand it and
+  # the recipe will not compensate; write /home/...). PUBLIC half only -
+  # safe in any env/secret store. Empty (the CI default) = the image ships
+  # NO SSH keys at all: key-only dropbear then means NO SSH access at all -
+  # deliberate, the repo holds no keys at all (no fallback file).
+  # Put your own plain ed25519/RSA pubkey here
+  # (via .zed/tasks.json env) to avoid sk-*/FIDO per-connection signing
+  # prompts. /root is on the read-only squashfs: this is the ONLY way to
+  # (via .zed/tasks.json env) to avoid sk-*/FIDO per-connection signing
+  # prompts. /root is on the read-only squashfs: this is the ONLY way to
+  # change the key on a built image.
+  SOLAR_SSH_PUBLIC_KEY: ""
 
 repos:
   # Pull in the pinned repo definitions (oe-core, bitbake,
