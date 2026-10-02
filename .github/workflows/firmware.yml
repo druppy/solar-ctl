@@ -18,6 +18,26 @@ env:
   IMAGE_DIR: build/tmp/deploy/images/raspberrypi0-wifi
 
 jobs:
+  # Fast native unit tests (inv_ctl), independent of the firmware build.
+  unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install host deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build
+
+      # UI OFF: no glibmm/SDL2/LVGL needed - net.cpp is pure libc + syscalls.
+      - name: Configure (tests only)
+        run: cmake -S inv_ctl -B build-tests -G Ninja -DINV_CTL_BUILD_UI=OFF -DINV_CTL_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build tests
+        run: cmake --build build-tests --target inv_ctl_tests
+
+      - name: ctest
+        run: ctest --test-dir build-tests --output-on-failure
+
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 180

@@ -658,8 +658,17 @@
   (fixed + OTA'd 2026-10-02): wext-proc emits `" %-8s:"` — there is a
   LEADING space before the iface name too; trimming only the
   pre-colon padding leaves " wlan0", strcmp never matches and the UI
-  shows `WiFi: 0 dBm` (linked=1 via carrier, level=0 via the
   query_signal failure zeroing it). Trim BOTH ends.
+- inv_ctl unit tests (added 2026-10-02): CTest + Catch2 v3 (amalgamated,
+  `EXCLUDE_FROM_ALL`), harness gated by `INV_CTL_BUILD_TESTS` (default OFF
+  — the Yocto build never sees Catch2 or a FetchContent at do_configure) and
+  `INV_CTL_BUILD_UI=OFF` (skips glibmm/SDL2/LVGL entirely — net.cpp is libc
+  + syscalls). Run: `cmake -DINV_CTL_BUILD_UI=OFF -DINV_CTL_BUILD_TESTS=ON`
+  + `ctest --test-dir <dir>`. CI: parallel `unit-tests` job in firmware.yml
+  (no kas, no secrets). golden /proc/net/wireless inputs = bench captures;
+  golden inputs replay via tmpfile(). Catch2 comes from GitHub (v3.7.1,
+  EXCLUDE_FROM_ALL needs CMake>=3.28 — runner-pinned ubuntu-24.04 provides
+  cmake 3.28; the Yocto build never configures the test branch).
 - Bench serial quirks: the default console is the **mini-UART** — it eats
   chars on lines >~60; wake with `\r`, flush with `\025\003`, never type
   3.4 KB base64 lines (wget over LAN instead). CH341 dongle drops off
