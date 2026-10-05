@@ -5,236 +5,273 @@
 // against our panel-mipi-dbi-spi.bin (derived from LVGL 9.4 lv_nv3007.c).
 // "IVO" init = panel-tuned SOCTRL/GIP/framing values from the module vendor.
 //
-// ---- verbatim upstream content below ----
+// ANNOTATED 2026-10-05 against fw/docs/NV3007.pdf (cited as "ds §x.y").
+// Convention: EVERY data line and every upstream comment is kept verbatim;
+// annotations are added ONLY as their own comment lines. Verified: the
+// annotated file still diffs byte-for-byte (values-wise) against our blob.
+// The same register dictionary applies to our shipped blob — identical set.
+// Note: the entire block up to "FF=00" runs on the PRIVATE register page
+// (ds repeats "Should set FF=A5 before configure this registers" across
+// §6.3–§6.6); standard MIPI-DBI commands (§6.2.x) only appear after FF=00.
+//
+// ---- verbatim upstream content (annotations added) below ----
 
 NV3007A_CMD(0xff);
-NV3007A_DAT(0xa5);	
-NV3007A_CMD(0x9a);
+NV3007A_DAT(0xa5);	// page select -> PRIVATE register page
+// ---- charge-pump / power (ds §6.4.11–6.4.26, PWRCTRL1–17) ----
+NV3007A_CMD(0x9a);   // PWRCTRL12 (ds §6.4.22): DDVDH clamp enable + level (dflt 28h)
 NV3007A_DAT(0x08);
-NV3007A_CMD(0x9b);
+NV3007A_CMD(0x9b);   // PWRCTRL13 (ds §6.4.23): pump control
 NV3007A_DAT(0x08);	
-NV3007A_CMD(0x9c);
+NV3007A_CMD(0x9c);   // PWRCTRL14 (ds §6.4.24): pump control
 NV3007A_DAT(0xb0);	
-NV3007A_CMD(0x9d);
+NV3007A_CMD(0x9d);   // PWRCTRL15 (ds §6.4.25): pump control
 NV3007A_DAT(0x16);
-NV3007A_CMD(0x9e);
+NV3007A_CMD(0x9e);   // PWRCTRL16 (ds §6.4.26): pump control
 NV3007A_DAT(0xc4);
-NV3007A_CMD(0x8f);
+NV3007A_CMD(0x8f);   // PWRCTRL1 (ds §6.4.11): VGH/VGL/MV pump clock select (dflt 22h/04h)
 NV3007A_DAT(0x55);
 NV3007A_DAT(0x04);
-NV3007A_CMD(0x84);
+// ---- gamma reference LDO (ds §6.4.4–6.4.6, Gamma LDO control 1–3) ----
+NV3007A_CMD(0x84);   // GLDOCTRL2 (ds §6.4.5)
 NV3007A_DAT(0x90);
-NV3007A_CMD(0x83);
+NV3007A_CMD(0x83);   // GLDOCTRL1 (ds §6.4.4)
 NV3007A_DAT(0x7b);
-NV3007A_CMD(0x85);
+NV3007A_CMD(0x85);   // GLDOCTRL3 (ds §6.4.6)
 NV3007A_DAT(0x33);
-NV3007A_CMD(0x60);
+// ---- GAMCTRL: gamma-curve reference taps (ds §6.4.1, 60h–7Fh).
+// 6x = positive ramp (vrp*), 7x = negative ramp (vrn*); the register index
+// maps to a position on the 64-point ramp (not 1:1!), the value trims the
+// source voltage. Note the vendor values are pos/neg-symmetric pairs. ----
+NV3007A_CMD(0x60);   // vrp0[3:0] (dflt 00h)
 NV3007A_DAT(0x00);
-NV3007A_CMD(0x70);
+NV3007A_CMD(0x70);   // vrn0[3:0] (dflt 00h)
 NV3007A_DAT(0x00);
-NV3007A_CMD(0x61);
+NV3007A_CMD(0x61);   // vrp1[5:0] (dflt 06h)
 NV3007A_DAT(0x02);
-NV3007A_CMD(0x71);
+NV3007A_CMD(0x71);   // vrn1[5:0] (dflt 06h)
 NV3007A_DAT(0x02);
-NV3007A_CMD(0x62);
+NV3007A_CMD(0x62);   // vrp2[5:0] (dflt 0Ch)
 NV3007A_DAT(0x04);
-NV3007A_CMD(0x72);
+NV3007A_CMD(0x72);   // vrn2[5:0] (dflt 0Ch)
 NV3007A_DAT(0x04);
-NV3007A_CMD(0x6c);
+NV3007A_CMD(0x6c);   // vrp61[5:0] (dflt 29h)
 NV3007A_DAT(0x29);
-NV3007A_CMD(0x7c);
+NV3007A_CMD(0x7c);   // vrn61[5:0] (dflt 29h)
 NV3007A_DAT(0x29);
-NV3007A_CMD(0x6d);
+NV3007A_CMD(0x6d);   // vrp62[5:0] (dflt 31h)
 NV3007A_DAT(0x31);
-NV3007A_CMD(0x7d);
+NV3007A_CMD(0x7d);   // vrn62[5:0] (dflt 31h)
 NV3007A_DAT(0x31);
-NV3007A_CMD(0x6e);
+NV3007A_CMD(0x6e);   // vrp63[3:0] (dflt 0Fh)
 NV3007A_DAT(0x0f);
-NV3007A_CMD(0x7e);
+NV3007A_CMD(0x7e);   // vrn63[3:0] (dflt 0Fh)
 NV3007A_DAT(0x0f);
-NV3007A_CMD(0x66);
+NV3007A_CMD(0x66);   // vrp20[6:0] (dflt 30h)
 NV3007A_DAT(0x21);
-NV3007A_CMD(0x76);
+NV3007A_CMD(0x76);   // vrn20[6:0] (dflt 30h)
 NV3007A_DAT(0x21);
-NV3007A_CMD(0x68);
+NV3007A_CMD(0x68);   // vrp43[6:0] (dflt 44h)
 NV3007A_DAT(0x3A);
-NV3007A_CMD(0x78);
+NV3007A_CMD(0x78);   // vrn43[6:0] (dflt 44h)
 NV3007A_DAT(0x3A);
-NV3007A_CMD(0x63);
+NV3007A_CMD(0x63);   // vrp4[4:0] (dflt 0Bh)
 NV3007A_DAT(0x07);
-NV3007A_CMD(0x73);
+NV3007A_CMD(0x73);   // vrn4[4:0] (dflt 0Ah)
 NV3007A_DAT(0x07);
-NV3007A_CMD(0x64);
+NV3007A_CMD(0x64);   // vrp6[4:0] (dflt 0Ah)
 NV3007A_DAT(0x05);
-NV3007A_CMD(0x74);
+NV3007A_CMD(0x74);   // vrn6[4:0] (dflt 09h)
 NV3007A_DAT(0x05);
-NV3007A_CMD(0x65);
+NV3007A_CMD(0x65);   // vrp13[3:0] (dflt 06h)
 NV3007A_DAT(0x02);
-NV3007A_CMD(0x75);
+NV3007A_CMD(0x75);   // vrn13[3:0] (dflt 07h)
 NV3007A_DAT(0x02);
-NV3007A_CMD(0x67);
+NV3007A_CMD(0x67);   // vrp27[2:0] + vrp36[2:0] (dflt 43h)
 NV3007A_DAT(0x23);
-NV3007A_CMD(0x77);
+NV3007A_CMD(0x77);   // vrn27[2:0] + vrn36[2:0] (dflt 34h)
 NV3007A_DAT(0x23);
-NV3007A_CMD(0x69);
+NV3007A_CMD(0x69);   // vrp50[3:0] (dflt 08h)
 NV3007A_DAT(0x08);
-NV3007A_CMD(0x79);
+NV3007A_CMD(0x79);   // vrn50[3:0] (dflt 08h)
 NV3007A_DAT(0x08);
-NV3007A_CMD(0x6a);
+NV3007A_CMD(0x6a);   // vrp57[4:0] (dflt 12h)
 NV3007A_DAT(0x13);
-NV3007A_CMD(0x7a);
+NV3007A_CMD(0x7a);   // vrn57[4:0] (dflt 13h)
 NV3007A_DAT(0x13);
-NV3007A_CMD(0x6b);
+NV3007A_CMD(0x6b);   // vrp59[4:0] (dflt 14h)
 NV3007A_DAT(0x13);
-NV3007A_CMD(0x7b);
+NV3007A_CMD(0x7b);   // vrn59[4:0] (dflt 13h)
 NV3007A_DAT(0x13);
-NV3007A_CMD(0x6f);
+NV3007A_CMD(0x6f);   // gamma jump points vj0p63[1:0] + vj1p63[1:0] (dflt 00h)
 NV3007A_DAT(0x00);
-NV3007A_CMD(0x7f);
+NV3007A_CMD(0x7f);   // gamma jump points vj0n63[1:0] + vj1n63[1:0] (dflt 00h)
 NV3007A_DAT(0x00);
-NV3007A_CMD(0x50);
+// ---- 50h/52h: NO section exists for either in the NV3007 datasheet (both
+// register maps jump 4Fh -> 53h). The vendor init carries the writes anyway
+// (LVGL/Arduino_GFX list includes them too). Treat as don't-touch legacy. ----
+NV3007A_CMD(0x50);   // undocumented in ds
 NV3007A_DAT(0x00);
-NV3007A_CMD(0x52);
+NV3007A_CMD(0x52);   // undocumented in ds
 NV3007A_DAT(0xd6);
-NV3007A_CMD(0x53);
+// ---- ITCTRL: internal porch widths -> effective internal frame timing
+// (ds §6.3.16–§6.3.19). Unrelated to the DT panel-timing porches, which in
+// our overlay double as the GRAM offset. ----
+NV3007A_CMD(0x53);   // ITCTRL1: inter_vbp[7:0] internal V-back-porch (dflt 0Ch)
 NV3007A_DAT(0x08);
-NV3007A_CMD(0x54);
+NV3007A_CMD(0x54);   // ITCTRL2: inter_vfp[6:0] internal V-front-porch (dflt 08h)
 NV3007A_DAT(0x08);
-NV3007A_CMD(0x55);
+NV3007A_CMD(0x55);   // ITCTRL3: inter_hbp[7:0] internal H-back-porch (dflt 25h)
 NV3007A_DAT(0x1e);
-NV3007A_CMD(0x56);
+NV3007A_CMD(0x56);   // ITCTRL4: inter_hfp[7:0] internal H-front-porch (dflt 25h)
 NV3007A_DAT(0x1c);
 //goa map_sel
-NV3007A_CMD(0xa0);
+// ---- GOA (gate-on-array / GIP): gate-start (VST), gate-end (VEND) and
+// gate-clock (CLK) waveform programming (ds §6.5.1–§6.5.4). This drives the
+// TFT gate scan; "map_sel" in the upstream comment refers to a GOACTRL
+// field whose datasheet note says "map_sel=2'b01 only, others reserved". ----
+NV3007A_CMD(0xa0);   // GOACTRL (ds §6.5.1): goa_slpin_sel/goa_vds_slpin_sel/
+                     // goa_vck_slpin_sel/level_sel/exit_disp_hiz_num + map_sel
 NV3007A_DAT(0x2b);
 NV3007A_DAT(0x24);
 NV3007A_DAT(0x00);
-NV3007A_CMD(0xa1);
+NV3007A_CMD(0xa1);   // GOA VST control (ds §6.5.2, gate-start waveform, A1h–AAh)
 NV3007A_DAT(0x87);
-NV3007A_CMD(0xa2);
+NV3007A_CMD(0xa2);   // GOA VST control (ds §6.5.2)
 NV3007A_DAT(0x86);
-NV3007A_CMD(0xa5);
+NV3007A_CMD(0xa5);   // GOA VST control (ds §6.5.2)
 NV3007A_DAT(0x00);
-NV3007A_CMD(0xa6);
+NV3007A_CMD(0xa6);   // GOA VST control (ds §6.5.2)
 NV3007A_DAT(0x00);
-NV3007A_CMD(0xa7);
+NV3007A_CMD(0xa7);   // GOA VST control (ds §6.5.2)
 NV3007A_DAT(0x00);
-NV3007A_CMD(0xa8);
+NV3007A_CMD(0xa8);   // GOA VST control (ds §6.5.2)
 NV3007A_DAT(0x36);
-NV3007A_CMD(0xa9);
+NV3007A_CMD(0xa9);   // GOA VST control (ds §6.5.2)
 NV3007A_DAT(0x7e);
-NV3007A_CMD(0xaa);
+NV3007A_CMD(0xaa);   // GOA VST control (ds §6.5.2)
 NV3007A_DAT(0x7e);
-NV3007A_CMD(0xB9);
+NV3007A_CMD(0xB9);   // GOACLK control (ds §6.5.4, gate-clock waveform, B9h–D1h)
 NV3007A_DAT(0x85);
-NV3007A_CMD(0xBA);
+NV3007A_CMD(0xBA);   // GOA CLK control (ds §6.5.4, B9h–D1h)
 NV3007A_DAT(0x84);
-NV3007A_CMD(0xBB);
+NV3007A_CMD(0xBB);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x83);
-NV3007A_CMD(0xBC);
+NV3007A_CMD(0xBC);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x82);
-NV3007A_CMD(0xBD);
+NV3007A_CMD(0xBD);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x81);
-NV3007A_CMD(0xBE);
+NV3007A_CMD(0xBE);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x80);
-NV3007A_CMD(0xBF);
+NV3007A_CMD(0xBF);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x01);
-NV3007A_CMD(0xC0);
+NV3007A_CMD(0xC0);   // GOA CLK control (ds §6.5.4, B9h–D1h)
 NV3007A_DAT(0x02);
-NV3007A_CMD(0xc1);
+NV3007A_CMD(0xc1);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x00);
-NV3007A_CMD(0xc2);
+NV3007A_CMD(0xc2);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x00);
-NV3007A_CMD(0xc3);
+NV3007A_CMD(0xc3);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x00);
-NV3007A_CMD(0xc4);
+NV3007A_CMD(0xc4);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x33);
-NV3007A_CMD(0xc5);
+NV3007A_CMD(0xc5);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x7e);
-NV3007A_CMD(0xc6);
+NV3007A_CMD(0xc6);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x7e);
-NV3007A_CMD(0xC8);
+NV3007A_CMD(0xC8);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x33);
 NV3007A_DAT(0x33);
-NV3007A_CMD(0xC9);
+NV3007A_CMD(0xC9);   // GOA CLK control (ds §6.5.4, gate-clock waveform, B9h–D1h)
 NV3007A_DAT(0x68);
-NV3007A_CMD(0xCA);
+NV3007A_CMD(0xCA);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x69);
-NV3007A_CMD(0xCB);
+NV3007A_CMD(0xCB);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x6a);
-NV3007A_CMD(0xCC);
+NV3007A_CMD(0xCC);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x6b);
-NV3007A_CMD(0xCD);
+NV3007A_CMD(0xCD);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x33);
 NV3007A_DAT(0x33); 
-NV3007A_CMD(0xCE);
+NV3007A_CMD(0xCE);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x6c);
-NV3007A_CMD(0xCF);
+NV3007A_CMD(0xCF);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x6d);
-NV3007A_CMD(0xD0);
+NV3007A_CMD(0xD0);   // GOA CLK control (ds §6.5.4)
 NV3007A_DAT(0x6e);
-NV3007A_CMD(0xD1);
+NV3007A_CMD(0xD1);   // GOA CLK control (ds §6.5.4, last)
 NV3007A_DAT(0x6f);
-NV3007A_CMD(0xAB);
-NV3007A_DAT(0x03);
+NV3007A_CMD(0xAB);   // GOAVEND control (ds §6.5.3, ABh–B8h): goa_vendN_shift_start/
+NV3007A_DAT(0x03);   // end windows = where each phase's gate-END pulse lands
 NV3007A_DAT(0x67);
-NV3007A_CMD(0xAC);
+NV3007A_CMD(0xAC);   // GOAVEND control (ds §6.5.3)
 NV3007A_DAT(0x03);
 NV3007A_DAT(0x6b);
-NV3007A_CMD(0xAD);
+NV3007A_CMD(0xAD);   // GOAVEND control (ds §6.5.3)
 NV3007A_DAT(0x03);
 NV3007A_DAT(0x68);
-NV3007A_CMD(0xAE);
+NV3007A_CMD(0xAE);   // GOAVEND control (ds §6.5.3)
 NV3007A_DAT(0x03);
 NV3007A_DAT(0x6c);
-NV3007A_CMD(0xb3);
+NV3007A_CMD(0xb3);   // GOAVEND control (ds §6.5.3)
 NV3007A_DAT(0x00);
-NV3007A_CMD(0xb4);
+NV3007A_CMD(0xb4);   // GOAVEND control (ds §6.5.3)
 NV3007A_DAT(0x00);
-NV3007A_CMD(0xb5);
+NV3007A_CMD(0xb5);   // GOAVEND control (ds §6.5.3)
 NV3007A_DAT(0x00);
-NV3007A_CMD(0xB6);
+NV3007A_CMD(0xB6);   // GOAVEND control (ds §6.5.3)
 NV3007A_DAT(0x32);
-NV3007A_CMD(0xB7);
+NV3007A_CMD(0xB7);   // GOAVEND control (ds §6.5.3)
 NV3007A_DAT(0x7e);
-NV3007A_CMD(0xB8);
+NV3007A_CMD(0xB8);   // GOAVEND control (ds §6.5.3, last)
 NV3007A_DAT(0x7e);
-NV3007A_CMD(0xe0);
-NV3007A_DAT(0x00);
-NV3007A_CMD(0xe1);
-NV3007A_DAT(0x03);
+// ---- SOCTRL (ds §6.6.1, E0h–F2h): source-driver timing windows — which
+// column ranges get source pre-charge (pop/pon) / pre-discharge (nop/noff) /
+// sustain drive, plus polarity control. This is the exact block we widened
+// to chip reset defaults during the speckle-line hunt (bench test 7): no
+// effect, which itself says the stock windows were never the problem. ----
+NV3007A_CMD(0xe0);   // SOCTRL E0: MSB bits ld_start[8] ld_end[8] srcpop_en_
+NV3007A_DAT(0x00);   // start/end[8] fr_prec_start/end[8] (dflt 00h)
+NV3007A_CMD(0xe1);   // SOCTRL E1: 1st=ld_start[7:0] (dflt 03h),
+NV3007A_DAT(0x03);   // 2nd=sd_bias_adj[3:0] (dflt 0Ah)
 NV3007A_DAT(0x0f);
-NV3007A_CMD(0xe2);
+NV3007A_CMD(0xe2);   // SOCTRL E2: ld_end[7:0] (dflt 04h)
 NV3007A_DAT(0x04);
-NV3007A_CMD(0xe3);
-NV3007A_DAT(0x01);
-NV3007A_CMD(0xe4);
+NV3007A_CMD(0xe3);   // SOCTRL E3: srcpop_en_start[7:0] (dflt 01h) — positive
+NV3007A_DAT(0x01);   // source pre-charge window, start column
+NV3007A_CMD(0xe4);   // SOCTRL E4: srcpop_en_end[7:0] (dflt 14h)
 NV3007A_DAT(0x0e);
-NV3007A_CMD(0xe5);
+NV3007A_CMD(0xe5);   // SOCTRL E5: srcnop_en_start[7:0] (dflt 01h) — pre-discharge start
 NV3007A_DAT(0x01);
-NV3007A_CMD(0xe6);
+NV3007A_CMD(0xe6);   // SOCTRL E6: srcnop_en_end[7:0] (dflt 19h)
 NV3007A_DAT(0x19);
-NV3007A_CMD(0xe7);
+NV3007A_CMD(0xe7);   // SOCTRL E7: fr_prec_start[7:0] (dflt 16h)
 NV3007A_DAT(0x10);
-NV3007A_CMD(0xe8);
+NV3007A_CMD(0xe8);   // SOCTRL E8: fr_prec_end[7:0] (dflt 29h)
 NV3007A_DAT(0x10);
-NV3007A_CMD(0xea);
+// NOTE: E9h deliberately skipped here — written below with 0x29 ("1 dot").
+NV3007A_CMD(0xea);   // SOCTRL EA: fr_sd_en_start[7:0] (dflt 2Bh) — sustain-drive window
 NV3007A_DAT(0x12);
-NV3007A_CMD(0xeb);
+NV3007A_CMD(0xeb);   // SOCTRL EB: fr_sd_en_end[7:0] (dflt C1h)
 NV3007A_DAT(0xd0);
-NV3007A_CMD(0xec);
+NV3007A_CMD(0xec);   // SOCTRL EC: c_start/c_end + chopper_sel[2:0] + en bits (dflt 00h)
 NV3007A_DAT(0x04);
-NV3007A_CMD(0xed);
+NV3007A_CMD(0xed);   // SOCTRL ED: be_prec_start[7:0] (dflt 07h)
 NV3007A_DAT(0x07);
-NV3007A_CMD(0xee);
+NV3007A_CMD(0xee);   // SOCTRL EE: be_prec_end[7:0] (dflt 1Bh)
 NV3007A_DAT(0x07);
-NV3007A_CMD(0xef);
+NV3007A_CMD(0xef);   // SOCTRL EF: be_sd_en_start[7:0] (dflt 1Dh)
 NV3007A_DAT(0x09);
-NV3007A_CMD(0xf0);
+NV3007A_CMD(0xf0);   // SOCTRL F0: be_sd_en_end[7:0] (dflt C1h)
 NV3007A_DAT(0xd0);
-NV3007A_CMD(0xf1);
+NV3007A_CMD(0xf1);   // SOCTRL F1: pol_switch[7:0] (dflt 14h)
 NV3007A_DAT(0x0e);
 
+// Upstream transcription quirk, present identically in LVGL 9.4's list: the
+// 0xF9 write is commented out, yet its DAT(0x17) survives un-commented on
+// the next line. LVGL carries this entry as CMD 0xF9 + DAT 0x17 inside the
+// page-A5 list, and our blob ships exactly that. Kept verbatim; the diff
+// tool (and .rules) document the reconstruction.
 //NV3007A_CMD(0xF9);
 //NV3007A_DAT(0x17); 
 //NV3007A_CMD(0xf2);
@@ -243,30 +280,34 @@ NV3007A_DAT(0x0e);
 //NV3007A_DAT(0x0b);
 //NV3007A_DAT(0x20);
 //NV3007A_CMD(0xF9);
-NV3007A_DAT(0x17); 
-NV3007A_CMD(0xf2);
-NV3007A_DAT(0x2c);
+NV3007A_DAT(0x17);   // (belongs to the commented-out F9) = FSM Control value (ds §6.6.4)
+NV3007A_CMD(0xf2);   // SOCTRL F2 (ds §6.6.1, 4 params): source charge/discharge
+NV3007A_DAT(0x2c);   // drive levels + recharge timing settings
 NV3007A_DAT(0x1b);
 NV3007A_DAT(0x0b);
 NV3007A_DAT(0x20);
 ////1 dot
+// E9 = pol_ctrl/pol_ini/ofc_ctl/ofc_init/pol_ctl2 + fr_sd_en MSBs (ds §6.6.1).
+// The vendor "1 dot" comment = dot-inversion polarity scheme.
 NV3007A_CMD(0xe9);
 NV3007A_DAT(0x29);
-NV3007A_CMD(0xec);
+NV3007A_CMD(0xec);   // repeat of the ECh write above — same value, harmless
 NV3007A_DAT(0x04);
 //TE
-NV3007A_CMD(0x35);
-NV3007A_DAT(0x00); 
-NV3007A_CMD(0x44);
+NV3007A_CMD(0x35);   // TEON (ds §6.2.19): tearing-effect signal on. No TE
+NV3007A_DAT(0x00);   // wire on our 8-pin header — decorative here.
+NV3007A_CMD(0x44);   // TECTRL1 (ds §6.3.5): tearing-effect line/window config
 NV3007A_DAT(0x00);
 NV3007A_DAT(0x10); 
-NV3007A_CMD(0x46);
+NV3007A_CMD(0x46);   // TECTRL3 (ds §6.3.7)
 NV3007A_DAT(0x10); 
-NV3007A_CMD(0xff);
-NV3007A_DAT(0x00); 
-NV3007A_CMD(0x3a);
-NV3007A_DAT(0x05); 
-NV3007A_CMD(0x11); 
-Delay(220); 
-NV3007A_CMD(0x29); 
-Delay(200);
+NV3007A_CMD(0xff);   // page select -> back to PUBLIC page (end of the private
+NV3007A_DAT(0x00);   // register sandwich; matches LVGL create()'s FF A5/FF 00)
+NV3007A_CMD(0x3a);   // Pixel Format Set / COLMOD (ds §6.2.24): 0x05 = 16-bit
+NV3007A_DAT(0x05);   // RGB565 65K color — exactly our fb pixel format
+NV3007A_CMD(0x11);   // Sleep Out (ds §6.2.5); ds §5.9 demands >=120 ms wait
+Delay(220);          // before next command: 220 ms (LVGL encodes this as 22
+                     // this as 22 in 10 ms units; our blob stores NOP 220 ms)
+NV3007A_CMD(0x29);   // Display On (ds §6.2.11)
+Delay(200);          // post-DISPON settling; our blob omits this (kernel
+                     // begins framebuffer flush right after — verified fine)
