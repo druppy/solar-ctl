@@ -67,6 +67,18 @@
   the real home PSK, into CI artifacts/releases. CI has a guard step that
   fails the build if any of these secret-bearing files ever get tracked by
   git (firmware.yml "Guard against committed secret files").
+- `SOLAR_TZ` (kas `env:`, declared 2026-10-05) is the watch timezone:
+  the `inv-ctl` recipe writes `TZ=<value>` to `/etc/default/inv-ctl`,
+  which `inv-ctl.service` reads via `EnvironmentFile=-` (same
+  `/etc/default` convention as dropbear). Unset = no file = UTC fallback
+  (all CI builds). **musl has no zoneinfo** — value must be a POSIX TZ
+  string (`CET-1CEST,M3.5.0,M10.5.0/3` = Copenhagen); a zoneinfo name is
+  silently ignored by musl (= still UTC), so do_install bb-fatals on
+  `:*` (glibc file form), digit-less `*/*` (names never contain the
+  offset digits that every POSIX spec has), and `Etc/*` (the digit-
+  carrying name exception). `create_now_local()` honours TZ via
+  localtime_r — zero app code changed. Not a secret; safe in CI env.
+  `/etc/default/inv-ctl` is squashfs-baked: changing TZ = rebuild+OTA.
 - `SOLAR_SSH_PUBLIC_KEY` (kas `env:`, declared 2026-10-02) is baked into
   `/root/.ssh/authorized_keys` by `solar-rootkeys` (python do_install;
   one public key per line, real or literal `\n` separated, OR an ABSOLUTE
@@ -93,6 +105,14 @@
   `${UNPACKDIR}/<file>` paths for `file://` SRC_URI files.
 - A line whose first char is `}` inside a recipe shell/python function breaks
   bitbake's parser (e.g. a `network={...}` heredoc). Use template files + sed.
+- **Bare `$VAR` in a shell recipe function is NOT expanded by bitbake and
+  NOT exported to the task env** — it silently reads empty. Only the
+  braced `${VAR}` form triggers bitbake's textual expansion + dependency
+  tracking (hit 2026-10-05: SOLAR_TZ was present in the datastore per
+  `bitbake -e`, yet `[ -n "$SOLAR_TZ" ]` was false and the
+  /etc/default/inv-ctl bake skipped without a word; `${SOLAR_TZ}` fixed
+  it). Python functions differ: there `d.getVar("VAR")` is the mechanism
+  (and needs vardeps, see solar-rootkeys).
 - **A dangling `.bbappend` is a hard ERROR on wrynose, not a warning**: any
   `*.bbappend` in an *active* layer must match a recipe that is also visible.
   Adding `swupdate_%.bbappend` to `fw/` killed the image build (PR #1) with

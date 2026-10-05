@@ -59,6 +59,14 @@ env:
   # prompts. /root is on the read-only squashfs: this is the ONLY way to
   # change the key on a built image.
   SOLAR_SSH_PUBLIC_KEY: ""
+  # Watch UI timezone, baked into /etc/default/inv-ctl by the inv-ctl
+  # recipe (EnvironmentFile= in inv-ctl.service). MUST be a POSIX TZ
+  # string (e.g. 'CET-1CEST,M3.5.0,M10.5.0/3' for Europe/Copenhagen) —
+  # musl has NO zoneinfo support, so a name like 'Europe/Copenhagen'
+  # would be silently ignored and the clock would stay UTC; the recipe
+  # rejects values containing '/' for exactly this reason. Empty (the CI
+  # default) = no TZ baked = the watch shows UTC as before.
+  SOLAR_TZ: ""
 
 repos:
   # Pull in the pinned repo definitions (oe-core, bitbake,

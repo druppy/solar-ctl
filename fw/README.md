@@ -279,6 +279,16 @@ mbpoll -a 3 -b 9600 -t 4 -r 1 /dev/ttyAMA0
    (A plain passphrase works too — the recipe writes hex PSKs raw and quotes
    passphrases, per wpa_supplicant's syntax rules.)
 
+   Optional, non-secret: `SOLAR_TZ` bakes a timezone into
+   `/etc/default/inv-ctl`, read by `inv-ctl.service` via
+   `EnvironmentFile=-`; unset/empty (every CI build) leaves the watch on
+   **UTC** as before. musl has **no zoneinfo support**, so the value must
+   be a POSIX TZ string — `CET-1CEST,M3.5.0,M10.5.0/3` (Copenhagen/Berlin),
+   `GMT0BST,M3.5.0/1,M10.5.0/1` (London). A zoneinfo name
+   (`Europe/Copenhagen`) would be silently ignored by musl, so the inv-ctl
+   recipe rejects it at build time instead of shipping a UTC clock
+   wearing a wristband.
+
 2. Build from the repo root:
 
    ```sh

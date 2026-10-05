@@ -6,6 +6,10 @@ Documentation=https://github.com/druppy/solar-ctl
 After=local-fs.target
 
 [Service]
+# TZ for the watch face is baked from the SOLAR_TZ build variable into
+# this file (inv-ctl recipe); absent = UTC. musl only understands POSIX
+# TZ strings, not zoneinfo names - see fw/kas-rpi0.yml env:.
+EnvironmentFile=-/etc/default/inv-ctl
 ExecStart=/usr/bin/inv-ctl --backend fb --fb /dev/fb0
 Restart=always
 RestartSec=2

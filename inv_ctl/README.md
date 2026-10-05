@@ -20,6 +20,11 @@ see in the SDL window is what the panel shows.
 - `src/main.cpp` — glibmm main loop: ~10 ms LVGL pump, 1 s clock update,
   SIGINT/SIGTERM shutdown. `--backend sdl|fb` (auto: `sdl` when
   `$DISPLAY`/`$WAYLAND_DISPLAY` is set, else `fb`), `--fb DEVICE`.
+  The dial follows `Glib::DateTime::create_now_local()`, i.e. the `TZ`
+  env var: on the target it is baked from the `SOLAR_TZ` build variable
+  into `/etc/default/inv-ctl` (POSIX string — musl has no zoneinfo; see
+  `fw/kas-rpi0.yml` `env:`), absent = UTC; on a laptop just run with
+  your normal `TZ`.
 - `src/backend.cpp` — `lv_sdl_window_create` vs `lv_linux_fbdev_create`
   (compile-gated by `LV_USE_SDL` / `LV_USE_LINUX_FBDEV`). The fb backend
   retries until `/dev/fb0` exists: the panel appears seconds after boot
