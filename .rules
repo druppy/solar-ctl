@@ -173,7 +173,26 @@
   bounds", probe -EINVAL. The back-porches double as the GRAM x/y offset
   of the visible window: this TZT module needs `hback-porch = <14>`
   (GRAM kx=14, else a stale-pixel column band; ky=0 — ruler pattern
-  flush both ends). The controller init sequence is a **firmware file**
+  flush both ends). A speckled white line on one long edge of this TZT
+  module is **not** software — full exoneration bench 2026-10-05:
+  fb edge columns uniformly dark; widening the DT window (13/144, then
+  11/148) no effect; stripes painted into fb cols outside the window
+  invisible on glass (displayed set == calibrated window); SPI 2 MHz vs
+  16 MHz no effect; external clean 3V3 no effect (not the Pi rail);
+  MADCTL MX flip (live-patched bin via bind-mount + spi rebind) leaves
+  leaves it glued to the same physical edge; SOUCTRL column windows E0h-F2h
+  (§6.6.1, per-column precharge/discharge ranges) widened to chip reset
+  defaults no effect; **three separate modules show it identically**; and the
+  vendor-published NV3007A SPI init for this exact glass
+  (`fw/docs/nv3007a-ivo-spi-init.txt`, OSPtek repo
+  `osptek/tft-2.79-142x428-spi-nv3007`, CC BY 4.0) diffs **byte-for-byte
+  identical to our 120-command shipped blob** — the init sequence is exonerated
+  by identity, not by inference (only delta: a Delay(200) after DISPON).
+  Verdict: source-driver/COF bonding artifact of the TZT product line —
+  mitigate by bezel or another module family, do not re-litigate in
+  software. `fw/tools/fb-dump.sh` captures /dev/fb0 via base64 — raw
+  binary through an interactive pty is silently mangled.
+  The controller init sequence is a **firmware file**
   `/lib/firmware/panel-mipi-dbi-spi.bin` (= compatible[0] + ".bin";
   request_firmware, retried ~every 60s) — shipped by `solar-panel-fw`
   and bench-verified lighting the glass 2026-10-02; never fabricate
