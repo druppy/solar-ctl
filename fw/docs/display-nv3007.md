@@ -103,6 +103,43 @@ Consequences of that design:
   with `--dump` and reviewing the output.
 - Kernel firmware format authority: `drivers/gpu/drm/tiny/panel-mipi-dbi.c`.
 
+### 5b. Anatomy of the LVGL nv3007 driver (blob ancestor) — audited 2026-10-05
+
+`lv_nv3007.c` (226 lines in LVGL 9.4) is a thin wrapper over
+`lv_lcd_generic_mipi`; reading it end-to-end settles several questions that
+otherwise resurface as fake leads:
+
+- **No platform logic whatsoever**: `lv_nv3007_create()` sends
+  `0xFF←0xA5` (extended page) → big init list → `0xFF←0x00` (standard MIPI
+  page) → short list (COLMOD, SLPOUT, delay, DISPON). Reset, power and bus
+  setup are the *platform's* job — the kernel's `mipi_dbi_hw_reset()` + soft
+  reset actually does more than LVGL ever did. Confirms trap 6.
+- **`0xFF` is the page-select register**: the whole SOCTRL/GIP block runs on
+  page `0xA5`, only COLMOD/SLPOUT/DISPON on page `0x00`. This explains the
+  dangling `DAT(0x17)` after the commented-out `0xF9` in
+  `fw/docs/nv3007a-ivo-spi-init.txt` — it belongs to `0xF9` inside the
+  page-A5 list, exactly as our blob ships it.
+- **Delays are 10 ms units unconditionally** (`lv_lcd_generic_mipi.c:125-130`,
+  `lv_delay_ms(num * 10)`, no small-value branch): the post-SLPOUT `22` is
+  220 ms — datasheet §5.9 wants ≥120 ms — and matches the vendor's
+  `Delay(220)`. The converter's unit rule is proven, not inferred.
+- **GRAM offset = `lv_nv3007_set_gap(x, y)`, default 0** (`:176-177`), added
+  to CASET/RASET at *flush* time (`:266-269`). Structurally identical to the
+  kernel's `dbi->x_offset` (fed by our DT `hback-porch = <14>`): both stacks
+  apply the window offset per-flush, never in init. An LVGL-direct user of
+  this glass MUST call `set_gap(14, 0)` or the trap-3 stale band returns.
+- **Deliberate non-actions**: init never sends MADCTL (`0x36`) — direction
+  comes from reset defaults (our MX-flip experiment changed a register nobody
+  steers, vendor included); never sends INVON/INVOFF (API exists, uncalled —
+  the IPS glass is normal-by-default, no ILI9488-style INVON fiddling);
+  COLMOD `0x3A=0x05` = RGB565 = our exact fb format; TE on (`0x35,00`) with
+  no TE wire on the 8-pin header, so it's decorative.
+- **The one divergence from our kernel path**: generic-MIPI `create()` runs
+  SLPIN(10 ms) → SWRESET(200) → SLPOUT(300) → NORMMODE *before* the big list;
+  the kernel path does hw+soft reset +5 ms and lets the blob's own
+  SLPOUT+220 do the waiting. Different dance, same endpoints, panel verified
+  happy — this is NOT a bug to chase, and it cannot move the speckle line.
+
 ### 6. The reset-polarity rabbit hole (a non-problem we spent time on)
 
 LVGL's nv3007 driver contains **no reset code at all**, and the kernel's
