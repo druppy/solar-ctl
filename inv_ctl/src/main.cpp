@@ -43,6 +43,9 @@ int main(int argc, char * argv[])
     Glib::OptionGroup group("display", "display backend options");
     Glib::ustring backend = "auto";
     Glib::ustring fbdev = "/dev/fb0";
+    /* Bench-verified viewing orientation: the UI is designed logical
+     * landscape; at 90 the status text and dial are upright as viewed on
+     * the bench (270 would be the view from the opposite side). */
     Glib::ustring rotate = "90";
     Glib::ustring net_if = "wlan0";
 
