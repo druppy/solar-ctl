@@ -1,9 +1,10 @@
 # NV3007 display bring-up — the story so far
 
 Timeline: driver chosen 2026-09, glass first lit 2026-10-01/02, UI verified
-on the bench **2026-10-02**. This file records *what the problems actually
-were*, in the order they cost us time, so the next person (or the next me)
-does not re-pay them. The terse facts also live in `.rules` and
+on the bench **2026-10-02**, speckle-line investigation closed as hardware
+**2026-10-05** (see its section). This file records *what the problems
+actually were*, in the order they cost us time, so the next person (or the
+next me) does not re-pay them. The terse facts also live in `.rules` and
 `fw/README.md`; this is the narrative version.
 
 ---
@@ -164,6 +165,52 @@ token-wise now.
 
 ---
 
+## The speckled white line on one long edge — closed: hardware
+
+Symptom: one row of speckled white pixels along one long edge of the portrait
+panel, on every boot, on **three separate physical modules**, independent of
+framebuffer content. It looks exactly like the GRAM-offset band of trap 3 —
+which is why it cost us two days. It is not.
+
+Evidence that exonerates software, each independently bench-checked:
+
+| # | Test | Result |
+| --- | ------------------------------------------------------------------ | -------------------------------------------- |
+| 1 | DT window widened (`hback-porch` 13/win 144, then 11/win 148)      | line unmoved — not an offset problem         |
+| 2 | Ruler pattern: fb edge columns uniformly dark, in and out of window | content clean — line is not coming from fb   |
+| 3 | Stripes painted into fb cols *outside* the DT window               | invisible on glass — GRAM addressing correct |
+| 4 | SPI clock 2 MHz vs 16 MHz                                          | no effect — not signal integrity             |
+| 5 | VDD from a clean external 3V3 instead of the Pi rail               | no effect — not supply noise                 |
+| 6 | MADCTL MX mirror flipped (live blob patch + driver rebind)         | line glued to same *physical* edge           |
+| 7 | SOUCTRL column windows E0h–F2h (datasheet §6.6.1) → reset defaults | no effect — not our column tuning            |
+| 8 | Three separate modules                                             | identical line — not unit damage             |
+| 9 | Vendor-published NV3007A SPI init for this exact glass             | byte-for-byte **identical** to our blob      |
+
+Test 9 is the clincher: `fw/docs/nv3007a-ivo-spi-init.txt` (OSPtek module
+YDP279B001-V2, repo `osptek/tft-2.79-142x428-spi-nv3007`, CC BY 4.0) is the
+module vendor's own init for this glass and diffs identical to our shipped
+120-command blob (only delta: a `Delay(200)` after `DISPON`). The init
+sequence is exonerated *by identity*, not by inference — there is no init
+sequence that could fix this, because we already ship theirs.
+
+**Verdict:** source-driver / COF bonding artifact of the TZT product line.
+Mitigate mechanically (bezel hiding that edge) or switch module family. Do
+**not** re-litigate in software; all levers above are exhausted, and `.rules`
+forbids fabricating NV3007 register values anyway.
+
+Tooling built for the hunt, worth keeping:
+
+- `fw/tools/fb-dump.sh` — captures `/dev/fb0` as base64 (raw bytes through
+  an interactive pty are silently mangled; this is the only reliable way to
+  get "eyes on glass" over SSH).
+- Live blob experiments: patched bin → `/data/fw/`, `mount --bind /data/fw
+  /lib/firmware`, unbind/bind `/sys/bus/spi/drivers/panel-mipi-dbi`, restart
+  `inv-ctl`. Reverted by reboot, ideal for register what-ifs (tests 6 and 7
+  ran this way).
+- The controller datasheet for register archaeology: `fw/docs/NV3007.pdf`.
+
+---
+
 ## Orientation
 
 `panel-mipi-dbi` has **no DT rotation property**. Rotate in software
@@ -183,3 +230,6 @@ overlay means reflashing p1 on the bench.
   pattern re-verifies kx/ky in five minutes.
 - 16 MHz is validated on *this* bench wiring; new physical layout = one
   ruler pattern + one pixel-noise look.
+- The speckle edge: accepted as hardware. If the product housing ever gets
+  a bezel, orient it over the affected long edge (left in portrait, as
+  delivered).
