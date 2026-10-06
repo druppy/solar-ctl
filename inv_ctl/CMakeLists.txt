@@ -26,6 +26,7 @@ if(INV_CTL_BUILD_UI)
         src/main.cpp
         src/watch.cpp
         src/net.cpp
+        src/board.cpp
         src/status_panel.cpp
         src/backend.cpp)
     target_compile_definitions(inv-ctl PRIVATE $<$<BOOL:${INV_CTL_SYSTEM_LVGL}>:INV_CTL_SYSTEM_LVGL=1>)
@@ -78,9 +79,10 @@ if(INV_CTL_BUILD_TESTS)
 
     # test_net.cpp #includes ../src/net.cpp on purpose (reaches the anonymous
     # namespace; do NOT also compile src/net.cpp into this target - duplicate
-    # symbols).
+    # symbols). Same for test_board.cpp and src/board.cpp.
     add_executable(inv_ctl_tests
         tests/test_net.cpp
+        tests/test_board.cpp
         ${catch2_SOURCE_DIR}/extras/catch_amalgamated.cpp)
     target_include_directories(inv_ctl_tests PRIVATE
         src ${catch2_SOURCE_DIR}/extras)

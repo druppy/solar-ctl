@@ -31,6 +31,11 @@ see in the SDL window is what the panel shows.
   once `panel-mipi-dbi` has probed.
 - `src/watch.*` — LVGL watch face sized to the 142 px panel width
   (dial, 12 ticks, hour/minute/second hands as pivot-rotated bars).
+- `src/board.*` — Raspberry Pi model + SoC serial from the device tree
+  (`/sys/firmware/devicetree/base/{model,serial-number}`, read once at
+  startup); the status panel shows them as two extra lines. On machines
+  without a Pi DT (x86 laptop on ACPI) `board_query()` returns empty and
+  the labels are not created.
 - `systemd/inv-ctl.service` — installed + enabled by the recipe.
 - `native/lv_conf.h` — native-only LVGL config; mirrors the meta-oe
   lvgl defconfig bits that matter (color depth 32, 256 KB pool).

@@ -7,6 +7,7 @@
  * clock/network update and signal handling; the libinput and Modbus event
  * sources will be attached to this same loop later. */
 #include "backend.hpp"
+#include "board.hpp"
 #include "lvgl.hpp"
 #include "net.hpp"
 #include "status_panel.hpp"
@@ -122,7 +123,8 @@ int main(int argc, char * argv[])
                           lv_palette_main(LV_PALETTE_GREEN), true, LV_FONT_DEFAULT);
 
     WatchFace face = build_watch(lv_screen_active());
-    StatusPanel panel = build_status_panel(lv_screen_active());
+    const BoardInfo board = board_query();
+    StatusPanel panel = build_status_panel(lv_screen_active(), board);
 
     const string_view netif = net_if.c_str();   /* outlives the loop: both are main-scope */
     NetStatus net{};

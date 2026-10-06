@@ -806,6 +806,21 @@
   **std::cmatch** — `smatch` is `string::const_iterator`-based and
   will not bind (GCC 16 spelled it out; the build failing silently
   left ctest replaying the stale binary as a false 10/10).
+- inv_ctl board identity (added 2026-10-06): status panel shows
+  `/sys/firmware/devicetree/base/{model,serial-number}` (bench capture:
+  each file is ONE NUL-terminated string, no newline — parser also
+  tolerates `\n`); gate = model prefix "Raspberry Pi", so a laptop
+  (x86, no DT at all) gets an empty `BoardInfo` and the labels are
+  never created. Zero W serial prints old-format 16-hex
+  `0000000047ec1e46` — the leading zeros are real, don't trim.
+  `test_board.cpp` #includes `board.cpp`; its fixture writes NUL bytes
+  with explicit length (the net fixture's strlen would truncate).
+- LVGL 9.4 antialiasing has **no config knob**: `disp->antialiasing`
+  defaults to 1 for `LV_COLOR_DEPTH > 8` (lv_display.c), and
+  `lv_display_set_antialiasing()` warns "Disabling anti-aliasing is
+  not supported since v9". Text AA is baked into the 4 bpp Montserrat
+  glyph bitmaps. Both our builds are depth 32 → AA is on, nothing to
+  enable (verified against the pinned SRCREV source, 2026-10-06).
 - Bench serial quirks: the default console is the **mini-UART** — it eats
   chars on lines >~60; wake with `\r`, flush with `\025\003`, never type
   3.4 KB base64 lines (wget over LAN instead). CH341 dongle drops off
