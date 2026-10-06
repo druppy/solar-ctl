@@ -19,6 +19,9 @@
 #include <csignal>
 #include <cstdio>
 #include <string>
+#include <string_view>
+
+using namespace std;
 
 namespace {
 
@@ -76,8 +79,8 @@ int main(int argc, char * argv[])
     context.set_main_group(group);
     try {
         context.parse(argc, argv);
-    } catch (const std::exception & e) {
-        std::fprintf(stderr, "inv-ctl: %s\n", e.what());
+    } catch (const exception & e) {
+        fprintf(stderr, "inv-ctl: %s\n", e.what());
         return 2;
     }
 
@@ -86,12 +89,12 @@ int main(int argc, char * argv[])
 
     int rotation = 90;
     try {
-        rotation = std::stoi(rotate);
+        rotation = stoi(rotate);
     } catch (...) {
         rotation = -1;
     }
     if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270) {
-        std::fprintf(stderr, "inv-ctl: --rotate must be 0, 90, 180 or 270\n");
+        fprintf(stderr, "inv-ctl: --rotate must be 0, 90, 180 or 270\n");
         return 2;
     }
 
@@ -104,8 +107,9 @@ int main(int argc, char * argv[])
     auto loop = Glib::MainLoop::create();
     lv_display_t * disp = nullptr;
     for (unsigned attempt = 1; !disp; ++attempt) {
-        std::string err;
-        disp = create_display(backend, fbdev, rotation, err);
+        string err;
+        // ustring -> string_view via its NUL-terminated buffer (alive here).
+        disp = create_display(backend.c_str(), fbdev.c_str(), rotation, err);
         if (!disp) {
             if (attempt == 1 || attempt % 15 == 0)
                 g_message("inv-ctl: waiting for display (%s): %s", backend.c_str(), err.c_str());
@@ -120,8 +124,8 @@ int main(int argc, char * argv[])
     WatchFace face = build_watch(lv_screen_active());
     StatusPanel panel = build_status_panel(lv_screen_active());
 
-    const std::string netif = net_if;
-    NetStatus net;
+    const string_view netif = net_if.c_str();   /* outlives the loop: both are main-scope */
+    NetStatus net{};
     auto update_all = [&face, &panel, &net, netif] {
         const auto now = Glib::DateTime::create_now_local();
         watch_set_time(face, now.get_hour(), now.get_minute(), now.get_second());

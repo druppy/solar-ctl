@@ -82,6 +82,10 @@ IMAGE_INSTALL:append = " \
 # started as inv-ctl.service.
 IMAGE_INSTALL:append = " inv-ctl"
 
+# On-device screenshot tool (fbdump/): /dev/fb0 -> PNG to file or stdout,
+# zero deps. 'ssh board fbdump > shot.png' = eyes on glass from the laptop.
+IMAGE_INSTALL:append = " solar-fbdump"
+
 # --- A/B OTA milestone (doc swupdate-ota.md §5, §10 step 4) ---------------
 # Layout: p1 vfat (GPU fw + U-Boot) + hidden raw U-Boot env area + p2/p3
 # squashfs-xz root slots + p4 ext4 /data. The wks is found via

@@ -17,6 +17,8 @@
 #include <cstdio>
 #include <cstring>
 
+using namespace std;
+
 namespace {
 
 /* Replay NUL-free text as a stdio stream for the parse functions.
@@ -27,16 +29,16 @@ class MemoryStream
 public:
     explicit MemoryStream(const char * text)
     {
-        f_ = std::tmpfile();
+        f_ = tmpfile();
         if (f_) {
-            std::fwrite(text, 1, std::strlen(text), f_);
-            std::rewind(f_);
+            fwrite(text, 1, strlen(text), f_);
+            rewind(f_);
         }
     }
     ~MemoryStream()
     {
         if (f_)
-            std::fclose(f_);
+            fclose(f_);
     }
     MemoryStream(const MemoryStream &) = delete;
     MemoryStream & operator=(const MemoryStream &) = delete;
@@ -63,7 +65,7 @@ constexpr const char * kBenchLine = " wlan0: 0000   43.  -67.  -256        0    
 
 TEST_CASE("parse_wext: bench golden capture")
 {
-    const std::string all = std::string(kHeader) + kBenchLine;
+    const string all = string(kHeader) + kBenchLine;
     int dbm = 0;
     REQUIRE(parse(all.c_str(), "wlan0", dbm));
     CHECK(dbm == -67);
@@ -92,7 +94,7 @@ TEST_CASE("parse_wext: iface name column variants")
 
 TEST_CASE("parse_wext: picks the requested iface among several")
 {
-    const std::string multi = std::string(kHeader) +
+    const string multi = string(kHeader) +
         " eth0  : 0000   10.  -11.  -256        0      0      0      0      0        0\n" +
         kBenchLine;
     int dbm = 0;

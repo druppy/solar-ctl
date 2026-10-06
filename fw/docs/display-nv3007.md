@@ -237,9 +237,17 @@ forbids fabricating NV3007 register values anyway.
 
 Tooling built for the hunt, worth keeping:
 
-- `fw/tools/fb-dump.sh` — captures `/dev/fb0` as base64 (raw bytes through
-  an interactive pty are silently mangled; this is the only reliable way to
-  get "eyes on glass" over SSH).
+- `fbdump/` (recipe `solar-fbdump`) — **on-device** C++ screenshot tool:
+  `/dev/fb0` → PNG (file or stdout; zero deps, PNG + zlib stored-blocks
+  hand-rolled). `ssh board fbdump > shot.png` is the one-command "eyes on
+  glass" (`ssh` command form allocates no pty → binary-safe; `-b` base64s it
+  if bytes must cross an interactive pty, where raw RGB565 survives ~4 of
+  123 KB). Device defaults baked via CMake `FBDUMP_*`, CLI overrides.
+- `fw/tools/fb-dump.sh` — host-side wrapper: a thin `ssh <board> fbdump`
+  wrapper that checks the tool exists and errors cleanly ("OTA/flash an
+  image containing the solar-fbdump package") on images predating it.
+  The old dd+base64+python fallback is deleted — no python3-on-host
+  requirement anymore.
 - Live blob experiments: patched bin → `/data/fw/`, `mount --bind /data/fw
   /lib/firmware`, unbind/bind `/sys/bus/spi/drivers/panel-mipi-dbi`, restart
   `inv-ctl`. Reverted by reboot, ideal for register what-ifs (tests 6 and 7

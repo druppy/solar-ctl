@@ -2,6 +2,8 @@
 
 #include <cstdio>
 
+using namespace std;
+
 StatusPanel build_status_panel(lv_obj_t * parent)
 {
     lv_obj_t * col = lv_obj_create(parent);
@@ -27,15 +29,15 @@ void status_panel_update(StatusPanel & panel, const NetStatus & net)
 {
     char buf[64];
 
-    std::snprintf(buf, sizeof(buf), "SSID: %s", net.ssid.c_str());
+    snprintf(buf, sizeof(buf), "SSID: %s", net.ssid.c_str());
     lv_label_set_text(panel.ssid, buf);
 
     if (net.linked)
-        std::snprintf(buf, sizeof(buf), "WiFi: %d dBm", net.signal_dbm);
+        snprintf(buf, sizeof(buf), "WiFi: %d dBm", net.signal_dbm);
     else
-        std::snprintf(buf, sizeof(buf), "WiFi: no link");
+        snprintf(buf, sizeof(buf), "WiFi: no link");
     lv_label_set_text(panel.signal, buf);
 
-    std::snprintf(buf, sizeof(buf), "IP: %s", net.ipv4.c_str());
+    snprintf(buf, sizeof(buf), "IP: %s", net.ipv4.c_str());
     lv_label_set_text(panel.ip, buf);
 }

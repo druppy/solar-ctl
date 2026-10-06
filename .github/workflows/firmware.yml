@@ -64,6 +64,47 @@ jobs:
           use-actions-summary: true
           fail-on-error: false # display only; ctest is the gate
 
+  # Fast native unit tests (fbdump): the hand-rolled PNG/zlib/base64 core
+  # has no library to vouch for it, so the vectors + golden PNG are the gate.
+  # Tests OFF by default - the Yocto build never fetches Catch2.
+  fbdump:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write # dorny/test-reporter posts the report to this job's summary
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install host deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build
+
+      - name: Configure (tests on)
+        run: cmake -S fbdump -B build-tests-fbdump -G Ninja -DFBDUMP_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build tests
+        run: cmake --build build-tests-fbdump --target fbdump_tests
+
+      - name: ctest
+        run: ctest --test-dir build-tests-fbdump --output-on-failure
+
+      # Same JUnit-after-gate pattern as the inv-ctl job (report only).
+      - name: JUnit XML
+        if: ${{ !cancelled() }}
+        run: |
+          [ -x build-tests-fbdump/fbdump_tests ] && \
+            ./build-tests-fbdump/fbdump_tests --reporter Junit --out fbdump-junit.xml || true
+
+      - name: Publish report to job summary
+        if: ${{ !cancelled() && hashFiles('fbdump-junit.xml') != '' }}
+        uses: dorny/test-reporter@v3
+        with:
+          name: fbdump unit tests
+          path: fbdump-junit.xml
+          reporter: java-junit
+          use-actions-summary: true
+          fail-on-error: false # display only; ctest is the gate
+
   fw:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
