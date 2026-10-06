@@ -2,7 +2,13 @@
 
 **Status: design record + compile gate PASSED + bench tests 0–5 DONE (test 5
 PASS 2026-09-25: U-Boot A/B milestone image validated end-to-end) + signed
-single-file `.swu` flow IMPLEMENTED in-tree (2026-09-28, pending bench).**
+single-file `.swu` flow IMPLEMENTED in-tree (2026-09-28, pending bench).
+2026-10-05: the U-Boot env moved off the p1 FAT file into a hidden raw
+redundant pair (raw redundant pair, `ENV_IS_IN_MMC` + `ENV_REDUNDANT`);
+every "`uboot.env` on p1" statement below is superseded — see
+[`ab-boot-uboot.md`](ab-boot-uboot.md) card layout + traps; the `.swu`
+payload and the SWUpdate side are unchanged (same libubootenv, rewritten
+`/etc/fw_env.config`).**
 Plan of record: **per-slot kernel via U-Boot
 (Tier 3)** — one slot = one kernel + modules + root (§5). Branch
 `swupdate_setup`. SWUpdate builds on musl (`[ci]` run 35926622985).

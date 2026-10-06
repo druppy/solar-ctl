@@ -1,10 +1,11 @@
 [Unit]
-Description=Mount the vfat boot partition (U-Boot env + GPU firmware)
-# /etc/fw_env.config points at /boot/uboot.env, so fw_printenv/fw_setenv and
-# SWUpdate's bootenv flush all need p1 mounted. The wks mountpoint is dead
-# weight: wrynose's direct imager writes no fstab line (bench 2026-09-28,
-# fresh slot-B boot had /boot unmounted -> "Cannot initialize environment").
-# p1 stays ro; solar-update remounts rw around the install.
+Description=Mount the vfat boot partition (read-only, factory kernel seed)
+# The U-Boot env left p1 on 2026-10-05 (raw redundant area behind it), so
+# NOTHING here needs rw anymore: the sole Linux-side consumer of p1 is
+# solar-cores-seed's first-boot copy of /boot/uImage to /data/cores/slot-a.
+# The wks mountpoint is still dead weight: wrynose's direct imager writes no
+# fstab line (bench 2026-09-28, fresh slot-B boot had /boot unmounted).
+# Slot switches (fw_setenv / SWUpdate bootenv) touch the raw area only.
 
 [Mount]
 What=/dev/disk/by-label/boot

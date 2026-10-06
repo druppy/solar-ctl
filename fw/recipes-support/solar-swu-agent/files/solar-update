@@ -44,11 +44,9 @@ mkdir -p /run/solar-update
 rm -f /run/solar-update/no-reboot
 [ "$NO_REBOOT" = "1" ] && : > /run/solar-update/no-reboot
 
-# The env write (bootenv flush) lands on p1, which is mounted ro by default:
-# libubootenv - the same target fw_setenv uses - cannot write it otherwise.
-# Hold /boot rw for the whole run (the flush happens inside swupdate).
-mount -o remount,rw /boot
-trap 'mount -o remount,ro /boot' EXIT INT TERM
+# The env write (bootenv flush) lands in the RAW redundant env area on the
+# card (fw_env.config -> /dev/mmcblk0, u-boot_%.bbappend) - no filesystem,
+# no mount, no /boot rw dance. p1 is never written by Linux at all.
 
 echo "solar-update: installing set 'stable,$SET' ($*)"
 if ! swupdate -e "stable,$SET" -k "$KEY" "$@"; then

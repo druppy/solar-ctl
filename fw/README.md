@@ -60,13 +60,14 @@ gh secret set SOLAR_WIFI_COUNTRY # optional, e.g. DK (default GB)
 | `kas-rpi0.yml`                           | **Build this** — repos (wrynose branch tips, incl. `meta-swupdate`), machine, WiFi + signing-key + SSH-pubkey env, local.conf bits |
 | `conf/layer.conf`                        | `fw/` is a small meta layer (`solar-ctl`)                                                     |
 | `conf/distro/solar-ctl.conf`             | Our distro: `TCLIBC=musl`, `INIT_MANAGER=systemd`, lean distro features                       |
-| `files/wic/solar-ctl-ab.wks`             | A/B disk layout: p1 vfat + p2/p3 squashfs slots + p4 ext4 `/data`                             |
+| `files/wic/solar-ctl-ab.wks.in`          | A/B disk layout TEMPLATE: p1 vfat + hidden raw U-Boot env area + p2/p3 squashfs slots + p4 ext4 `/data` |
+| `classes/solar-ablayout.bbclass`         | Flash-layout constants (boot size, raw env offsets/size) — shared by wks, u-boot fragment, fw_env.config, env blob |
 | `classes/solar-swu-signing.bbclass`      | `SOLAR_SWU_*_KEY` resolution (content / path; no fallback; public key derived + cross-checked) → SWUpdate signing |
 | `recipes-core/images/solar-ctl-image.bb` | The image (U-Boot A/B layout, SWUpdate agent, RO root + `/etc` overlay)                       |
 | `recipes-core/images/solar-ctl-swu.bb`   | Single signed `.swu` (both slots as `stable,main`/`stable,alt` sets)                          |
 | `recipes-support/swupdate/`              | bbappend + kconfig fragment: minimal swupdate (signing on, web UI/lua/scripts off)            |
 | `recipes-support/solar-swu-agent/`       | On-target glue: `solar-update`, pub key, hwrevision, kernel-seed + progress services          |
-| `recipes-bsp/u-boot/`                    | U-Boot ext4 fragment + pre-seeded `uboot.env` blob                                            |
+| `recipes-bsp/u-boot/`                    | U-Boot ext4 + raw-redundant-env fragments, seeded env blob, `/etc/fw_env.config` rewrite       |
 | `recipes-connectivity/solar-wifi/`       | WiFi bring-up: supplicant config + systemd units                                              |
 | `recipes-core/dropbear/`                 | bbappend: root-only key-only SSH config                                                       |
 | `recipes-core/solar-rootkeys/`           | `/root/.ssh/authorized_keys` baked from `SOLAR_SSH_PUBLIC_KEY` (public half)                 |
@@ -367,8 +368,9 @@ Three options:
 
 ## A/B updates & signing
 
-The image ships the A/B layout (`files/wic/solar-ctl-ab.wks`): p1 vfat (GPU
-firmware, U-Boot, fallback `uImage`, pre-seeded `uboot.env`) + p2/p3
+The image ships the A/B layout (`files/wic/solar-ctl-ab.wks.in`): p1 vfat
+(GPU firmware, U-Boot, fallback `uImage`) + a hidden raw redundant U-Boot
+env area + p2/p3
 squashfs-xz root slots + p4 ext4 `/data` holding the `/etc` overlay upper and
 the **per-slot kernels** (`/data/cores/slot-{a,b}/uImage`). U-Boot env `slot=a|b`
 picks the slot; the kernel is loaded from `/data` via `ext4load`, so normal

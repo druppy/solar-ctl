@@ -83,18 +83,27 @@ IMAGE_INSTALL:append = " \
 IMAGE_INSTALL:append = " inv-ctl"
 
 # --- A/B OTA milestone (doc swupdate-ota.md §5, §10 step 4) ---------------
-# Layout: p1 vfat (GPU fw + U-Boot + per-slot kernel) + p2/p3 squashfs-xz
-# root slots + p4 ext4 /data. The wks is found via WKS_SEARCH_PATH
-# (files/wic/ of this layer) and overrides rpi-base.inc's WKS_FILE ?=.
-WKS_FILE = "solar-ctl-ab.wks"
+# Layout: p1 vfat (GPU fw + U-Boot) + hidden raw U-Boot env area + p2/p3
+# squashfs-xz root slots + p4 ext4 /data. The wks is found via
+# WKS_SEARCH_PATH (files/wic/ of this layer) and overrides rpi-base.inc's
+# WKS_FILE ?=. It is a TEMPLATE: image_types_wic expands the geometry
+# constants of solar-ablayout.bbclass (the single source shared with the
+# u-boot env fragment and fw_env.config) into the build dir at build time.
+inherit solar-ablayout
+WKS_FILE = "solar-ctl-ab.wks.in"
 
 # p1 keeps the top-level uImage (from RPI_EXTRA_IMAGE_BOOT_FILES) ONLY as
 # the factory fallback: the real per-slot kernels live on ext4 /data
 # (/data/cores/slot-{a,b}/uImage, loaded by boot.scr via ext4load) so the
-# kernel is OTA-able without touching FAT. uboot.env is the pre-seeded
-# libubootenv blob (solar-uboot-env: fw_setenv cannot create it from zero).
-IMAGE_BOOT_FILES:append = " uboot.env"
+# kernel is OTA-able without touching FAT. The pre-seeded env blob is no
+# longer an IMAGE_BOOT_FILES entry (2026-10-05): solar-uboot-env deploys
+# uboot-env-redundant.bin straight into the hidden wks area via wic
+# rawcopy, so nothing env-related lands on p1 at all.
 DEPENDS += " solar-uboot-env"
+
+# Belt for the wks template: do_write_wks_template expands the constants
+# via getVar of the raw body; make sure they are pinned in its hash.
+do_write_wks_template[vardeps] += "SOLAR_BOOT_ALIGN_KB SOLAR_BOOT_SIZE_MB SOLAR_UBOOT_ENV_OFFSET_KB SOLAR_UBOOT_ENV_BLOB"
 
 # Standalone squashfs artifact = the rootfs payload of the .swu (stable
 # symlink ...rootfs.squashfs-xz, referenced by solar-ctl-swu.bb). Same
@@ -122,11 +131,13 @@ OVERLAYFS_ETC_CREATE_MOUNT_DIRS = "0"
 # kernel (solar-ctl-slim.cfg) because there is no initramfs to load it
 # before mounting root, so the kernel-module-squashfs package no longer
 # exists at all.
-# u-boot-env ships /etc/fw_env.config (-> /boot/uboot.env); libubootenv-bin
+# u-boot-env ships /etc/fw_env.config - rewritten by u-boot_%.bbappend to
+# point at the RAW redundant env area (no /boot involvement); libubootenv-bin
 # is the wrynose fw_printenv/fw_setenv, so a manual bench slot switch is
-#   mount -o remount,rw /boot; fw_setenv slot b; mount -o remount,ro /boot
-# (swupdate's U-Boot backend writes the SAME env via libubootenv0, and
-# solar-update holds /boot rw around the install for exactly that).
+# just
+#   fw_setenv slot b
+# on the raw block device (2026-10-05: the remount-rw /boot dance is gone;
+# swupdate's U-Boot backend writes the SAME pair via libubootenv0).
 IMAGE_INSTALL:append = " \
     kernel-module-overlay \
     u-boot-env \

@@ -301,8 +301,8 @@
   alt = p3 + slot-b }`, chosen at install: `swupdate -i f.swu -e
   stable,main|alt -k /etc/solar/swupdate.pub.pem`. `/usr/bin/solar-update`
   (recipe `solar-swu-agent`) ONLY derives the set from `root=` in
-  /proc/cmdline, mkdirs `/data/cores/slot-{a,b}`, holds /boot rw (trap
-  remounts ro on EXIT) and forwards args to swupdate — both `-i f.swu` and
+  /proc/cmdline, mkdirs `/data/cores/slot-{a,b}` and forwards args to
+  swupdate — both `-i f.swu` and
   `-d "-u https://..."` work (CONFIG_DOWNLOAD+DOWNLOAD_SSL now on; curl+TLS
   in the image, nothing listens); `-n|--no-reboot` only plants the one-shot
   `/run/solar-update/no-reboot`. The reboot is done by **our
@@ -376,10 +376,55 @@
   (`u-boot-configure.inc` merges every SRC_URI `*.cfg`). **NO dtb in the
   .swu**: boot uses the p1 DTB+overlays loaded by start.elf (never OTA'd) →
   kernels shipped by OTA must stay compatible with the installed dtb.
-- **`uboot.env` must be shipped, libubootenv cannot create it** (bench
-  2026-09-25). `fw/recipes-bsp/u-boot/solar-uboot-env_0.1.bb` deploys a
-  16384-byte blob = 4-byte LE CRC32 + **full u-boot default env + `slot=a\0`**
-  + NUL pad (zlib.crc32 over the remaining bytes). **slot-only blobs are a
+- **U-Boot env = raw redundant pair in a hidden SD area, NOT the p1 FAT
+  file** (user decision + impl 2026-10-05: every slot switch used to mutate
+  FAT metadata — the one structure we promised p1 to be free of; msdos has
+  no 5th primary slot, so the 32 KiB region is a wic `--no-table --offset`
+  partition, `rawcopy` from DEPLOY_DIR_IMAGE; p2/p3/p4 keep their indexes,
+  slot-a lands at 108 MiB (p1 = 4..104 exactly). **The wks p1 must be
+  `--fixed-size`, never plain `--size`** (hit 2026-10-05: wic's default
+  `overhead_factor=1.3` multiplies non-fixed parts during content sizing —
+  `--size 100` silently became 130 MiB, walked over the hidden area's
+  `--offset`, and do_image_wic died with "Could not place mmcblk02 at
+  offset 109051904"; the bench-validated 2026-09 images actually had
+  slot-a at 136 MiB, unnoticed because every consumer addresses slots by
+  index). All geometry
+  constants live in `fw/classes/solar-ablayout.bbclass` (boot size → env
+  offset derivation, shared by wks.in template, u-boot fragment, fw_env.
+  config, blob recipe). U-Boot: `# CONFIG_ENV_IS_IN_FAT is not set` +
+  `ENV_IS_IN_MMC` + `ENV_REDUNDANT` + both `CONFIG_ENV_OFFSET(_REDUND)`
+  hex symbols are ALL generated from the class constants at configure time
+  — `do_configure:prepend` writes `${B}/solar-env-redundant.cfg` (SRC_URI
+  cfg files are verbatim, bitbake never expands file contents),
+  `do_configure:append` post-merges it (`merge_config.sh -m -O`) +
+  **`olddefconfig`** + greps that bbfatal on silently-dropped symbols.
+  **Never enable the MMC env backend in a SRC_URI `*.cfg` and never use
+  `oldconfig` here** (hit 2026-10-05: `u-boot-configure.inc` runs
+  `cml1_do_configure = yes '' | oe_runmake oldconfig` over SRC_URI cfgs
+  BEFORE any bbappend `:append` body; `ENV_IS_IN_MMC` without values makes
+  the defaultless hex `ENV_OFFSET` prompt, empty `yes` answers re-prompt
+  forever — an infinite loop that wrote a 60 GB log.do_configure before
+  exit 137; olddefconfig is promptless and cannot hang). Byte layout
+  VERIFIED against both
+  sides of the wire: per copy `[crc32 LE over DATA ONLY][flags u8][data
+  ENV_SIZE-5]` (u-boot env_internal.h ENV_HEADER_SIZE=4+1, libubootenv
+  uboot_env_redund — identical); higher flags wins, seed = copy0 flag0 +
+  copy1 flag1 so first saveenv heals copy0. Blob bytes + merged `.config`
+  asserts PASSED in build 2026-10-05 (`ENV_OFFSET=0x6800000`,
+  `ENV_OFFSET_REDUND=0x6804000`, `# CONFIG_ENV_MMC_USE_DT is not set`,
+  FAT sub-symbols gone, 32768-B blob CRCs/flags verified). `/etc/fw_env.config` (legacy
+  2-line redundant form) is rewritten by a **`do_install[postfuncs]`**
+  python in the u-boot bbappend: postfuncs run after ALL do_install bodies
+  including other layers' `:append` — a second `do_install:append` would
+  LOSE to meta-raspberrypi's (its prio 9 parses after our 6, FILESEXTRAPATHS
+  first-match likewise favors them); ownership stays in ${PN}-env. libubootenv
+  docs confirm: 2 entries = redundant pair; file paths AND raw block devices
+  both legal; negative offsets = from end of device.
+- **The env blob must be shipped, pre-built, complete** (bench
+  2026-09-25). `fw/recipes-bsp/u-boot/solar-uboot-env_0.1.bb` deploys
+  `uboot-env-redundant.bin` = 2 × 16384 bytes, each 4-byte LE CRC32 +
+  flags + **full u-boot default env + `slot=a\0`** + NUL pad
+  (zlib.crc32 over the data bytes only). **slot-only blobs are a
   trap** (hit 2026-09-28 first bench boot of the factory image): U-Boot treats
   a valid-CRC env as COMPLETE, so bootcmd/bootdelay vanish — autoboot and even
   `boot` become silent no-ops; recovery is `env default -a` + `env save` from
@@ -387,16 +432,30 @@
   `u-boot-initial-env-<machine>-<pv>` (u-boot.inc deploys it as KEY=VALUE
   text; `do_deploy[depends] += "virtual/bootloader:do_deploy"` is ORDERING
   only — bitbake can't hash that file, so touch the recipe after a u-boot
-  bump). libubootenv acceptance of the blob format VERIFIED on bench
-  2026-09-28 (`fw_printenv slot` → `slot=a`). Needs `inherit deploy` (that
+  bump; `do_deploy[vardeps]` pins the class-read SOLAR_UBOOT_* vars — the
+  by-name getVar stale-task trap again). libubootenv acceptance of the blob
+  format VERIFIED on bench 2026-09-28 (`fw_printenv slot` → `slot=a`, old
+  single-copy format). Needs `inherit deploy` (that
   class owns DEPLOYDIR; setting `do_deploy[dirs]="${DEPLOYDIR}"` by hand trips
-  the WORKDIR-pollution guard). Lands on p1 via `IMAGE_BOOT_FILES:append = "
-  uboot.env"` + `DEPENDS += solar-uboot-env`.
+  the WORKDIR-pollution guard). Lands on the card via the wks hidden rawcopy
+  part (was `IMAGE_BOOT_FILES` `uboot.env` until 2026-10-05) + `DEPENDS +=
+  solar-uboot-env`. **Bench VERIFIED 2026-10-05** (raw redundant pair, fresh
+  image): `fw_printenv slot` → a from the hidden area; manual `fw_setenv
+  slot b` + reboot → `root=/dev/mmcblk0p3` with ZERO p1 writes (FAT fallback
+  uImage loaded — slot-b had no kernel yet, which also validated that
+  path); two full URL OTAs (`solar-update -d "-u http://…"`) B→A and A→B —
+  slot-a and slot-b both later booted via ext4load of
+  /data/cores/slot-*/uImage; final manual b→a flip back to p2. bootenv
+  write via the U-Boot backend + libubootenv into the raw area = live.
+  STILL PENDING: the power-cut-mid-fw_setenv test — arm with
+  `fw_setenv slot b & sleep 0.01; yank power`, reboot, expect boot anyway
+  (higher-flags valid copy wins) and `fw_printenv slot` reporting one
+  consistent value.
 - **Nothing mounts `/boot` automatically** (bench 2026-09-28): the wrynose
   direct imager writes NO fstab line for the wks `/boot` mountpoint (stock OE
-  fstab ships) — a fresh boot has p1 unmounted, so `fw_printenv` dies with
-  "Cannot initialize environment" and `solar-update`'s
-  `mount -o remount,rw /boot` aborts (`set -e`). Fix = `boot.mount` unit in
+  fstab ships). Since 2026-10-05 the ONLY consumer is `solar-cores-seed`'
+  first-boot copy of /boot/uImage (env/slot switches moved to the raw area —
+  `fw_setenv` needs no mount now). Fix = `boot.mount` unit in
   solar-swu-agent (`What=/dev/disk/by-label/boot`, vfat, `ro`; enabled via
   `SYSTEMD_SERVICE`). A recipe must NOT `install -d ${D}/boot` (installed-vs-shipped
   QA; the dir already exists in the base rootfs). Overlay trap while

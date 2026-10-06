@@ -32,13 +32,16 @@ kernel and appends the matching `root=`.
 
 | Part | FS | Contents | OTA'd? |
 | ----- | ------ | ------------------------------------------------------------------ | ------------ |
-| p1 | vfat | GPU boot files (`bootcode.bin`, `start.elf`), **`u-boot.bin` deployed as `kernel.img`**, `boot.scr`, `uboot.env`, DTB + overlays, factory `uImage` fallback | **Never** |
+| p1 | vfat | GPU boot files (`bootcode.bin`, `start.elf`), **`u-boot.bin` deployed as `kernel.img`**, `boot.scr`, DTB + overlays, factory `uImage` fallback | **Never** |
+| — | raw | hidden (no table entry) redundant U-Boot env pair, flush with p1's end: 2 × 16 KiB `[crc32][flags][data]` copies at the offsets from class `solar-ablayout` (2026-10-05; replaced `/boot/uboot.env`) | written only by `fw_setenv`/SWUpdate |
 | p2 | squashfs | root slot **A** (read-only) | via `stable,main` |
 | p3 | squashfs | root slot **B** (read-only) | via `stable,alt` |
 | p4 | ext4 | `/data`: `overlay-etc/upper` (writable /etc), `log` (journal), `cores/slot-{a,b}/uImage` (the per-slot kernels), app state | kernels via same `.swu` |
 
 `/boot` (p1) is mounted **read-only** by our `boot.mount` unit — nothing
-mounts it automatically (see traps).
+mounts it automatically (see traps). Since 2026-10-05 its only Linux-side
+consumer is the first-boot kernel seed; slot switches write the raw env
+area instead, so p1 is now **never written by Linux at all**.
 
 ## Boot chain, top to bottom
 
@@ -49,8 +52,10 @@ mounts it automatically (see traps).
    UART stays enabled (U-Boot + no UART is a build error, and we want the
    serial bench console anyway). Production `boot.cmd` sets `bootdelay=-2`
    (prompt unreachable); the bench build keeps a 2 s window.
-3. **U-Boot** reads its environment from `uboot.env` on p1 (via the same
-   16 KiB blob `fw_setenv` uses), then runs `boot.scr`:
+3. **U-Boot** reads its environment from the RAW redundant pair in the
+   hidden area (`ENV_IS_IN_MMC` + `ENV_REDUNDANT`; both copies carry a CRC,
+   the higher `flags` byte wins, so a write torn by a power cut always
+   leaves one valid copy), then runs `boot.scr`:
    - `ext4load mmc 0:4 ${kernel_addr_r} /cores/slot-${slot}/uImage`
      — that is **p4** (0:4), the common mistake here is writing 0:3;
    - fallback: the FAT `uImage` on p1 (a factory card before `/data` exists);
@@ -77,10 +82,7 @@ journalctl -b -1 -u solar-swupdate-progress   # last boot's update story
 Manual flip (bench-validated):
 
 ```sh
-mount -o remount,rw /boot
-fw_setenv slot b
-mount -o remount,ro /boot
-reboot
+fw_setenv slot b    # raw redundant env area — no /boot mount, no rw dance
 ```
 
 ---
@@ -97,10 +99,10 @@ where:
 
 `solar-update` (our small wrapper) reads `root=` from `/proc/cmdline`, so
 "install" always means *into the slot you did not boot from*, prepares the
-`/data/cores` dirs, holds `/boot` writable only during the run, and forwards
-to `swupdate`. `-n` defers the reboot; the reboot itself is done by our
-`solar-swupdate-progress` service when the install reports SUCCESS —
-verified against 2026.05.1: **swupdate never reboots by itself**.
+`/data/cores` dirs, and forwards to `swupdate`. `-n` defers the reboot; the
+reboot itself is done by our `solar-swupdate-progress` service when the
+install reports SUCCESS — verified against 2026.05.1: **swupdate never
+reboots by itself**.
 
 Non-obvious rules baked into the payload/recipe (each is a runtime failure
 mode, not a style preference):
@@ -124,7 +126,9 @@ mode, not a style preference):
   an env-write failure fails the update, never half-flips.
 - no scripts in the `.swu` at all (LUA/scripts compiled out) — pure data.
 - the same `.swu` also carries `bootenv`-flush ordering guarantees via
-  libubootenv writing the same `uboot.env` `fw_setenv` uses.
+  libubootenv writing the same raw env pair `fw_setenv` uses
+  (`/etc/fw_env.config` two-line legacy redundant format, rewritten by
+  `u-boot_%.bbappend`).
 
 Delivery proven on bench: URL install (`-d "-u https://..."`) and local
 file install, auto-reboot B→A and deferred-reboot A→B.
@@ -133,16 +137,21 @@ file install, auto-reboot B→A and deferred-reboot A→B.
 
 ## The traps (each one cost a bench session)
 
-- **`uboot.env` must be shipped, pre-built, complete.** libubootenv cannot
-  create it, and a blob containing *only* `slot` is worse than none: a
-  valid-CRC environment is treated as COMPLETE, so `bootcmd`/`bootdelay`
-  vanish and the board boots into silence. Our recipe merges the real U-Boot
-  default environment + `slot=a` into the 16 KiB blob
-  (`solar-uboot-env`, CRC32 over the env text, NUL pad). Recovery from a bad
-  env at a U-Boot prompt: `env default -a` + `env save`.
+- **The env area must be shipped, pre-built, complete — and it is the
+  layout's most sacred 32 KiB.** The seed blob must contain the FULL
+  default environment plus `slot=a`: a valid-CRC environment is treated as
+  COMPLETE, so a slot-only blob silently deletes `bootcmd`/`bootdelay` and
+  the board boots into silence (hit 2026-09-28 with the old FAT blob;
+  recovery was `env default -a` + `env save` at the U-Boot prompt — which
+  still works: with both copies CRC-invalid U-Boot falls back to compiled
+  defaults). `solar-uboot-env` writes `u-boot-initial-env` + `slot=a` twice
+  with flags 0/1; u-boot and libubootenv agree on the byte layout
+  (`[crc32 LE][flags][data]`, crc over data only). Copy0 at the class
+  offset, copy1 at +16 KiB — wic `rawcopy --no-table` bakes both at flash
+  time; a garbage area is self-healing on first `saveenv` (flags 0 < 1).
 - **Nothing mounts `/boot`**: the wrynose imager writes no fstab line for
-  the wks `/boot` mountpoint. Without our `boot.mount`, `fw_printenv` dies
-  ("Cannot initialize environment") and `solar-update`'s remount fails.
+  the wks `/boot` mountpoint (matters only for the first-boot kernel seed
+  now — the env left p1 on 2026-10-05).
 - **`CONFIG_SQUASHFS=m` panics** first boot (no initramfs to mount root).
 - **boot.scr loads from `mmc 0:4`** — p4. Writing `0:3` points at the
   *other root slot* and fails obscurely.
@@ -169,3 +178,4 @@ file install, auto-reboot B→A and deferred-reboot A→B.
 | 2026-09-25 | test 5: full A/B chain, A→B→A flip, `/etc` overlay | PASS |
 | 2026-09-28 | signed single-`.swu` flow: URL install, auto-reboot, `-n` | PASS (bench) |
 | 2026-10-02 | full image w/ display + `SOLAR_SSH_PUBLIC_KEY`; kernel/rootfs OTA to slot B | image booted A; OTA = the current bench step |
+| 2026-10-05 | raw redundant U-Boot env in hidden SD area (off p1 FAT): manual A→B→A flips, 2× URL OTA (`stable,main`/`stable,alt`), ext4load of both `/data/cores/slot-*/uImage`, bootenv write via libubootenv | PASS (bench) — power-cut-mid-`fw_setenv` still pending |
