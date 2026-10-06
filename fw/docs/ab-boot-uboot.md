@@ -85,6 +85,34 @@ Manual flip (bench-validated):
 fw_setenv slot b    # raw redundant env area — no /boot mount, no rw dance
 ```
 
+### Power-cut-mid-`fw_setenv` (bench 2026-10-06: PASS)
+
+`fw/tools/env-powercut.sh` drives the redundant pair through every state a
+power cut mid-write can leave (log: `fw/tools/powercut-results.tsv`,
+gitignored). All PASS — the board always booted with exactly one
+consistent `slot` value:
+
+- **Real physical cut** (`arm`: raise the kernel dirty-writeback window,
+  `fw_setenv`, human pulls the plug at the printed prompt): the new value
+  landed fully — libubootenv fsyncs internally before `fw_setenv`
+  returns, so our side of the wire is already power-cut-safe.
+- **Synthesized torn promotion** (`torn`, fully self-run): the standby
+  copy is promoted completely (slot flipped, flags max+1, fresh CRC) but
+  only 19 of its 32 sectors are flushed — highest flags, dead CRC, the
+  exact state a cut leaves. Rejected as designed: the board booted the
+  untouched active copy. Fixture subtlety: the CRC covers data only and
+  our env generations differ *only* in the `slot` byte, so a flip-flop
+  promotion is byte-identical to the old standby and a partial flush is
+  trivially a complete write (the first run proved the wrong thing with
+  a valid CRC); one byte stamped in the NUL padding beyond the flush
+  window makes the tail genuinely stale.
+- **Active copy dead** (`corrupt`, CRC invalidated): boots the surviving
+  copy, and the next `fw_setenv` rewrites the dead copy byte-exactly —
+  self-heal verified.
+
+`boot.cmd` additionally re-validates `slot` (empty/garbage → `a`, no
+`saveenv`), so even a hypothetically dead pair never blocks the boot.
+
 ---
 
 ## Updating: one signed `.swu`, two sets
@@ -178,4 +206,5 @@ file install, auto-reboot B→A and deferred-reboot A→B.
 | 2026-09-25 | test 5: full A/B chain, A→B→A flip, `/etc` overlay | PASS |
 | 2026-09-28 | signed single-`.swu` flow: URL install, auto-reboot, `-n` | PASS (bench) |
 | 2026-10-02 | full image w/ display + `SOLAR_SSH_PUBLIC_KEY`; kernel/rootfs OTA to slot B | image booted A; OTA = the current bench step |
-| 2026-10-05 | raw redundant U-Boot env in hidden SD area (off p1 FAT): manual A→B→A flips, 2× URL OTA (`stable,main`/`stable,alt`), ext4load of both `/data/cores/slot-*/uImage`, bootenv write via libubootenv | PASS (bench) — power-cut-mid-`fw_setenv` still pending |
+| 2026-10-05 | raw redundant U-Boot env in hidden SD area (off p1 FAT): manual A→B→A flips, 2× URL OTA (`stable,main`/`stable,alt`), ext4load of both `/data/cores/slot-*/uImage`, bootenv write via libubootenv | PASS (bench) |
+| 2026-10-06 | power-cut-mid-`fw_setenv` on the raw pair (`fw/tools/env-powercut.sh`): real plug-pull, synthesized torn promotion (19/32 sectors, flags max+1), active-copy CRC kill, clean control | PASS (bench): torn/highest-flags-invalid copies rejected, boot always lands on one consistent `slot`; dead copy self-heals on next `fw_setenv` |

@@ -461,10 +461,22 @@
   slot-a and slot-b both later booted via ext4load of
   /data/cores/slot-*/uImage; final manual b→a flip back to p2. bootenv
   write via the U-Boot backend + libubootenv into the raw area = live.
-  STILL PENDING: the power-cut-mid-fw_setenv test — arm with
-  `fw_setenv slot b & sleep 0.01; yank power`, reboot, expect boot anyway
-  (higher-flags valid copy wins) and `fw_printenv slot` reporting one
-  consistent value.
+  **Power-cut-mid-`fw_setenv` DONE 2026-10-06** (`fw/tools/env-powercut.sh`
+  — dump/arm/done/torn/corrupt/verdict; results tsv gitignored; all
+  PASS): a real physical cut (arm mode, plug pulled in the raised
+  dirty-writeback window) LEFT THE NEW VALUE FULLY LANDED — libubootenv
+  fsyncs internally before `fw_setenv` returns. A synthesized torn
+  promotion (promote standby with flags max+1 + fresh CRC, flush only 19
+  of 32 sectors): the highest-flags-but-CRC-INVALID copy is rejected, the
+  board boots the untouched last-good copy with one consistent value.
+  Active-copy CRC kill: boots the survivor, and the NEXT `fw_setenv`
+  rewrites the dead copy byte-exactly (both CRCs identical again —
+  self-heal verified). Fixture trap found while building `torn`: the CRC
+  covers DATA ONLY and our generations differ only in the `slot` byte, so
+  a slot-flip-promoted blob is byte-identical to the old standby copy —
+  a partial flush of it is trivially a COMPLETE write (false PASS on the
+  first run); one byte stamped in the NUL padding beyond the flush window
+  makes the tail genuinely stale.
 - **Nothing mounts `/boot` automatically** (bench 2026-09-28): the wrynose
   direct imager writes NO fstab line for the wks `/boot` mountpoint (stock OE
   fstab ships). Since 2026-10-05 the ONLY consumer is `solar-cores-seed`'
