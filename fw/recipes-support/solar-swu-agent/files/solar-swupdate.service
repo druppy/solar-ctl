@@ -1,0 +1,23 @@
+[Unit]
+Description=solar-ctl SWUpdate install server (HTTP :8080, inactive slot only)
+# The progress logger must be listening BEFORE updates can succeed, so the
+# SUCCESS->reboot contract holds for server installs exactly as for the CLI.
+# The firewall loads Before=network-pre.target; want it up first anyway
+# (don't ever listen unfiltered).
+# network.target only, NEVER network-online.target: bench 2026-10-06 -
+# systemd-networkd-wait-online hangs FOREVER here (TimeoutStartSec=infinity,
+# networkd manages no link - udhcpc does the DHCP), so it held
+# multi-user.target hostage and the server never started behind it.
+Wants=solar-swupdate-progress.service solar-firewall.service network.target
+After=solar-swupdate-progress.service solar-firewall.service network.target
+
+[Service]
+# swupdate main stays foreground in -w daemon mode (it joins its network
+# thread) and sd_notify(READY=1) fires once sockets are up (CONFIG_SYSTEMD=y).
+Type=notify
+ExecStart=/usr/libexec/solar-swupdate-server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -269,7 +269,12 @@ jobs:
             grep -qx 'CONFIG_BOOTLOADERHANDLER=y' "$cfg" || { echo "::error::$cfg lost CONFIG_BOOTLOADERHANDLER (bootenv image handler missing - parser rejects the .swu!)"; fail=1; }
             grep -qx 'CONFIG_DOWNLOAD=y' "$cfg" || { echo "::error::$cfg lost CONFIG_DOWNLOAD (-u fetch)"; fail=1; }
             grep -qx 'CONFIG_DOWNLOAD_SSL=y' "$cfg" || { echo "::error::$cfg lost CONFIG_DOWNLOAD_SSL (https fetch)"; fail=1; }
-            for off in CONFIG_MTD CONFIG_WEBSERVER CONFIG_LUA CONFIG_SCRIPTS CONFIG_SURICATTA; do
+            # HTTP install server (2026-10-06): mongoose webserver must be in,
+            # but WITHOUT v6 (kernel has CONFIG_IPV6 off) and WITHOUT web TLS
+            # (signature is the gate; no cert plumbing on the bench).
+            grep -qx 'CONFIG_WEBSERVER=y' "$cfg" || { echo "::error::$cfg lost CONFIG_WEBSERVER (HTTP install server)"; fail=1; }
+            grep -qx 'CONFIG_MONGOOSE=y' "$cfg" || { echo "::error::$cfg lost CONFIG_MONGOOSE (only webserver impl)"; fail=1; }
+            for off in CONFIG_MTD CONFIG_LUA CONFIG_SCRIPTS CONFIG_SURICATTA CONFIG_MONGOOSEIPV6 CONFIG_MONGOOSESSL; do
               grep -qx "${off}=y" "$cfg" && { echo "::error::$cfg has $off=y (fragment not applied?)"; fail=1; }
             done
           done

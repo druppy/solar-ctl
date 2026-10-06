@@ -109,8 +109,12 @@ repos:
     branch: wrynose
     path: layers/meta-openembedded
     layers:
-      # only what we need from meta-OE (mbpoll/libmodbus for bus bring-up)
+      # meta-oe: mbpoll/libmodbus for bus bring-up. meta-networking:
+      # nftables (the solar-firewall ruleset loader; 2026-10-06) - it hard-
+      # depends on meta-python (LAYERDEPENDS), which therefore joins too.
       meta-oe:
+      meta-python:
+      meta-networking:
   meta-swupdate:
     # GitHub mirror (git.yoctoproject.org 403s here). Layer sits at the repo
     # root (conf/layer.conf), hence no `layers:` key - like meta-raspberrypi.

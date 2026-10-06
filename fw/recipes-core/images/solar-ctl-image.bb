@@ -148,21 +148,31 @@ IMAGE_INSTALL:append = " \
     libubootenv-bin \
 "
 
-# --- SWUpdate OTA agent ------------------------------------------------------
-# swupdate: on-demand CLI only. The recipe ships swupdate.service/.socket
-# that ENABLE THEMSELVES by installation (CONFIG_SYSTEMD=y) - a daemon
-# listening on IPC/USB contradicts the on-demand flow and wastes RAM, so
-# the units (and their wants-symlinks) are deleted in postprocess below.
-# swupdate-progress: the one daemon we do run (unit ships with
-# solar-swu-agent): receive-only watcher of the progress socket - logs
-# every update to journald and reboots via systemd on SUCCESS.
+# --- SWUpdate OTA agents -----------------------------------------------------
+# swupdate: signed-images build; since 2026-10-06 it runs as a DAEMON via
+# OUR solar-swupdate.service (HTTP :8080 install server; the inactive set is
+# derived at service start and pinned with -e/-q, signature with -k; doc
+# swupdate-ota.md §6.7). The upstream swupdate.service/.socket are STILL
+# deleted in postprocess below: they cannot know the per-boot slot selection,
+# and socket-activation of an install daemon is not what we want.
+# swupdate-progress: the progress watcher (unit ships with solar-swu-agent):
+# receive-only listener on the progress socket - logs every update to
+# journald and reboots via systemd on SUCCESS (CLI AND server installs).
+# swupdate-client: swclient for CLI pushes (incl. localhost bench tests).
 # solar-swu-agent: /etc/solar/swupdate.pub.pem, /etc/hwrevision,
-# /usr/bin/solar-update, first-boot kernel seed service.
+# /usr/bin/solar-update (CLI path), the server wrapper + unit + web root,
+# first-boot kernel seed service.
+# nftables + solar-firewall: default-deny INPUT with only 22 (dropbear) and
+# 8080 (swupdate server) reachable; kernel NF_TABLES is built-in
+# (solar-ctl-slim.cfg), no kernel-module-* packages.
 # e2fsck/mkfs.ext4: the /data self-heal in the overlayfs-etc preinit.
 IMAGE_INSTALL:append = " \
     swupdate \
     swupdate-progress \
+    swupdate-client \
     solar-swu-agent \
+    nftables \
+    solar-firewall \
     e2fsprogs-e2fsck \
     e2fsprogs-mke2fs \
 "
@@ -202,6 +212,15 @@ solar_ab_strip_swupdate_units() {
     rm -f ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/swupdate.service \
           ${IMAGE_ROOTFS}/etc/systemd/system/sockets.target.wants/swupdate.socket \
           ${IMAGE_ROOTFS}/etc/systemd/system/sockets.target.wants/swupdate-*.socket
+}
+
+# bench 2026-10-06: systemd-networkd-wait-online hangs forever on this image
+# (TimeoutStartSec=infinity, and networkd manages NO link - DHCP is done by
+# busybox udhcpc). It is enabled by default and blocks multi-user.target
+# forever (anything ordered after it never starts). Unenable it.
+ROOTFS_POSTPROCESS_COMMAND:append = " solar_ab_drop_wait_online;"
+solar_ab_drop_wait_online() {
+    rm -f ${IMAGE_ROOTFS}/etc/systemd/system/network-online.target.wants/systemd-networkd-wait-online.service
 }
 
 COMPATIBLE_MACHINE = "^raspberrypi"

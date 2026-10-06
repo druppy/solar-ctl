@@ -261,11 +261,15 @@
   layer and the parallel CI `swupdate` job are deleted. The bbappend + kconfig
   fragment now live in `fw/recipes-support/swupdate/` and are only legal there
   because `fw/kas-rpi0.yml` adds the meta-swupdate repo (dangling-bbappend
-  gotcha). swupdate IS in `IMAGE_INSTALL` (on-demand CLI; its auto-enabled
-  `.service`/`.socket` are deleted by an image postprocess fn).
+  gotcha). swupdate IS in `IMAGE_INSTALL`; its auto-enabled
+  `.service`/`.socket` are still deleted by the image postprocess fn —
+  since 2026-10-06 OUR `solar-swupdate.service` (solar-swu-agent) runs the
+  HTTP :8080 install server instead (see the next bullet; upstream units
+  cannot derive the per-boot set from root=).
   Merged-kconfig asserts (SIGNED_IMAGES/SIGALG_RAWRSA/HASH_VERIFY=y and —
   since the 2026-09-28 bootloader flip below — UBOOT/BOOTLOADER_DEFAULT_UBOOT/
-  DOWNLOAD/DOWNLOAD_SSL=y; MTD/WEBSERVER/LUA/SCRIPTS/SURICATTA not =y) moved
+  DOWNLOAD/DOWNLOAD_SSL=y, plus WEBSERVER/MONGOOSE=y since 2026-10-06;
+  MTD/LUA/SCRIPTS/SURICATTA/MONGOOSEIPV6/MONGOOSESSL not =y) moved
   into the main firmware CI job, reading the `${T}/swupdate-merged-dotconfig`
   snapshot the bbappend still writes (`rm_work` never deletes `temp`).
   **Warm-cache trap (hit 2026-10-02, runs 36853440890/37002108982):** when
@@ -318,12 +322,17 @@
   /proc/cmdline, mkdirs `/data/cores/slot-{a,b}` and forwards args to
   swupdate — both `-i f.swu` and
   `-d "-u https://..."` work (CONFIG_DOWNLOAD+DOWNLOAD_SSL now on; curl+TLS
-  in the image, nothing listens); `-n|--no-reboot` only plants the one-shot
+  in the image); since 2026-10-06 OUR `solar-swupdate.service` (solar-swu-agent)
+  runs the HTTP :8080 install server instead of upstream's units, which stay
+  deleted (they cannot derive the per-boot set from root=); `-n|--no-reboot`
+  only plants the one-shot
   `/run/solar-update/no-reboot`. The reboot is done by **our
   solar-swupdate-progress.service** (same recipe, `swupdate-progress` now in
   the image): watches the progress socket, logs to journald, on SUCCESS runs
   `/usr/libexec/solar-swu-reboot` (consumes the marker and stays up, else
-  `exec systemctl reboot` — never raw reboot(2)). Verified in 2026.05.1:
+  `exec systemctl reboot` — never raw reboot(2)). Since 2026-10-06 the same
+  contract covers SERVER installs (HTTP upload, see next bullet). Verified in
+  2026.05.1:
   **swupdate itself never reboots** — sw-description `reboot = true` only
   feeds progress/suricatta notifications; the progress server starts on EVERY
   run (core/swupdate.c:1116 — watcher fires for CLI -i/-d too); `-w` blocks
@@ -366,6 +375,70 @@
   a few KB. Recovery after the bug bit: `bitbake solar-ctl-swu -c cleansstate`
   (the promoted setscene unpack stamp must die before unpack re-runs).
   **Artifact name has a `.rootfs` infix**: `solar-ctl-swu-raspberrypi0-wifi.rootfs.swu`.
+- **HTTP install server + firewall (2026-10-06, doc swupdate-ota.md §6.8)**:
+  `solar-swupdate.service` (solar-swu-agent, Type=notify) runs
+  `/usr/libexec/solar-swupdate-server`, which derives the INACTIVE set from
+  `root=` at service start and `exec swupdate -e stable,<set> -q stable,<set>
+  -k /etc/solar/swupdate.pub.pem -w "-p 8080 -t 30 -r /usr/share/solar-swu-web"`
+  (all verified against 2026.05.1 `9000ecb5`): uploads via `/upload` carry no
+  set, so the daemon's `-e` applies (`core/stream_interface.c` overwrites only
+  when the request brings one); `-q` (`accepted-select` dict, `is_selection_allowed`
+  in `core/network_thread.c`) rejects any client-proposed set not on the list
+  → a client can never target the RUNNING partition; HW-compat and signature
+  run inside the stream parse regardless of transport (`check_hw_compatibility`
+  at `stream_interface.c:231`; a SIGNED_IMAGES build refuses to start without
+  `-k`). No size cap exists in the webserver (only `-t 30` idle watchdog); the
+  signature is the trust gate, open 8080 merely allows useless pushes. Reboot
+  on SUCCESS reuses the existing progress-socket contract (the daemon never
+  reboots itself; `swupdate -w` keeps foreground and sd_notify READY=1 →
+  Type=notify). Mongoose is the only WEBSERVER impl (kconfig `WEBSERVER=y` +
+  `MONGOOSE=y`); **`MONGOOSEIPV6`/`MONGOOSESSL` are hard-off**: kernel
+  `CONFIG_IPV6 is not set` (2026-10-06 user decision: nothing here speaks v6),
+  so v6 listeners would be dead weight, and web TLS is pointless when the
+  artifact is signed — no cert plumbing. Mongoose is vendored → zero new
+  DEPENDS. Web root ships as our own single-file `/usr/share/solar-swu-web
+  /index.html` (upload form + WS progress + beach SVG); `swupdate-www` is NOT
+  installed. `swupdate-client` (swclient) IS. **Firewall**: `solar-firewall`
+  recipe (fw/recipes-support/solar-firewall) = `/etc/nftables/solar.nft` +
+  oneshot unit Before=network-pre.target (atomic `nft -f`, starts with `flush
+  ruleset`); policy-drop `table ip` (**not `inet`** — NF_TABLES_INET depends
+  on the dead IPV6), allowing lo/established/related/DHCP-replies/icmp-echo/
+  tcp22/tcp8080. **DHCP replies need their own `udp sport 67` accepts (dport
+  67 and 68) placed BEFORE `ct state invalid drop`** (bench 2026-10-06: after a
+  reboot conntrack is empty, the client probes 0.0.0.0:68→255.255.255.255:67
+  and the server's unicast reply to the not-yet-owned yiaddr matches no
+  tracked flow — `established,related` never fires, policy drop wins, board
+  boots perfectly but silently never gets a lease = "no route to host" until
+  the cable-plug detective finds it in the ruleset).
+  Kernel symbols `NF_TABLES/NF_TABLES_IPV4/NF_CONNTRACK/NFT_CT` are **=y** in
+  `solar-ctl-slim.cfg` (no module packages, no load races; `nft_meta` is
+  core-built-in in 6.18, TCP/UDP conntrack unconditional under NF_CONNTRACK —
+  the old `NF_CT_PROTO_*` options are gone). Userspace `nftables` comes from
+  **meta-networking** (now a kas layer; it hard-depends on `meta-python`,
+  also added — LAYERDEPENDS error at first parse was the tell; both layers
+  live in the already-locked meta-openembedded repo → lockfile unchanged, and
+  `kas lock` said "No floating repos" when re-run). Distro conf pins
+  `PACKAGECONFIG:pn-nftables = "mini-gmp"` (no python/json/readline/gmp
+  runtime; python3-native is inherited by the recipe regardless). `ipv6`
+  stays in DISTRO_FEATURES_DEFAULTS on purpose: dropping it would churn the
+  basehash of nearly the whole world; the kernel kill is the real gate.
+  CI swupdate-kconfig asserts flipped: WEBSERVER/MONGOOSE =y, MONGOOSEIPV6/
+  MONGOOSESSL in the not-set list. **Bench round 2 (A→B→A over HTTP,
+  image-native)**: the unit must order `After=network.target`, NEVER
+  `network-online.target` — `systemd-networkd-wait-online` hangs
+  **forever** on this image (TimeoutStartSec=infinity, networkd manages
+  **no** link, DHCP is busybox `udhcpc`) and held `multi-user.target`
+  hostage; image unenables it (`solar_ab_drop_wait_online` postprocess,
+  solar-ctl-image.bb). `swupdate-client x.swu` flag-less works (daemon
+  `-e` applies; status stream + SUCCESS + progress-hook reboot; rc 0) —
+  `swupdate_async_start returns -1` is the `-q` REJECTION verdict, not a
+  transport error. Mongoose upload takes **any** multipart file-part name
+  (`mongoose_interface.c` streams `mp->part.filename`); optional form
+  field `set=stable,X` is the client proposal `-q` denies. Live-debug
+  edits under /etc sit in the **shared overlay upper** and survive slot
+  switches — delete them before calling a deploy image-native (the final
+  B→A deploy booted clean: slot a, zero pending jobs, server active,
+  no drop-ins).
 - **sw-description gotchas** (verified by building it): libconfig comments
   must be `/* */`; the `$fn(...)`/`@@VAR@@` expansion regex scans **every
   line including comments** — mentioning `$swupdate_get_sha256(...)` in a

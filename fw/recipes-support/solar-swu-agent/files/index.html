@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>solar-ctl — SWUpdate</title>
+<style>
+  html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+  body { display: flex; align-items: center; justify-content: center;
+         background: #7ec8e3; }
+  svg.beach { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: -1; }
+  .card { background: rgba(255,255,255,.88); border-radius: 14px; padding: 22px 26px;
+          max-width: 420px; width: calc(100% - 40px); box-shadow: 0 8px 30px rgba(0,40,80,.35); }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  p.sub { margin: 0 0 14px; color: #456; font-size: .85rem; }
+  input[type=file] { width: 100%; margin-bottom: 10px; }
+  button { width: 100%; padding: 10px; border: 0; border-radius: 8px; cursor: pointer;
+           background: #0b7285; color: #fff; font-size: 1rem; }
+  button:disabled { background: #999; }
+  .bar { height: 12px; background: #dde; border-radius: 6px; margin: 14px 0 8px;
+         overflow: hidden; }
+  .bar > div { height: 100%; width: 0%; background: #2f9e44; transition: width .4s; }
+  pre { background: #12242e; color: #b8e6c8; font-size: .7rem; padding: 8px;
+        border-radius: 6px; height: 130px; overflow-y: auto; white-space: pre-wrap; }
+  .note { font-size: .7rem; color: #678; margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<!-- solar-ctl beach: the getto-blaster runs on PV, like the whole house. -->
+<svg class="beach" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5db6e8"/><stop offset="1" stop-color="#cdeffd"/>
+    </linearGradient>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e78b8"/><stop offset="1" stop-color="#6fd0f0"/>
+    </linearGradient>
+    <linearGradient id="sand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f0d9a0"/><stop offset="1" stop-color="#d9b978"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="380" fill="url(#sky)"/>
+  <circle cx="660" cy="90" r="46" fill="#ffd93b"/>
+  <g stroke="#ffd93b" stroke-width="6" stroke-linecap="round">
+    <line x1="660" y1="18" x2="660" y2="0"/><line x1="660" y1="180" x2="660" y2="162"/>
+    <line x1="588" y1="90" x2="570" y2="90"/><line x1="750" y1="90" x2="732" y2="90"/>
+    <line x1="609" y1="39" x2="596" y2="26"/><line x1="711" y1="141" x2="724" y2="154"/>
+    <line x1="609" y1="141" x2="596" y2="154"/><line x1="711" y1="39" x2="724" y2="26"/>
+  </g>
+  <rect y="330" width="800" height="90" fill="url(#sea)"/>
+  <path d="M0 335 Q50 328 100 335 T200 335 T300 335 T400 335 T500 335 T600 335 T700 335 T800 335 V360 H0 Z"
+        fill="#fff" opacity=".55"/>
+  <path d="M0 400 Q200 380 420 402 T800 396 V600 H0 Z" fill="url(#sand)"/>
+  <!-- palm -->
+  <path d="M90 520 Q105 430 82 360" stroke="#8a5a2b" stroke-width="14" fill="none" stroke-linecap="round"/>
+  <g fill="#2f9e44">
+    <path d="M82 360 Q30 330 4 352 Q46 344 82 368 Z"/>
+    <path d="M82 360 Q40 300 8 300 Q52 316 84 366 Z"/>
+    <path d="M82 360 Q90 292 130 284 Q98 316 86 366 Z"/>
+    <path d="M82 360 Q140 320 172 336 Q122 340 86 370 Z"/>
+  </g>
+  <!-- two PV panels -->
+  <g>
+    <g transform="translate(560,430) rotate(-18)">
+      <rect width="110" height="66" rx="4" fill="#14335c" stroke="#0a1f3a" stroke-width="3"/>
+      <g stroke="#4f83c0" stroke-width="2">
+        <line x1="27" y1="0" x2="27" y2="66"/><line x1="55" y1="0" x2="55" y2="66"/>
+        <line x1="82" y1="0" x2="82" y2="66"/><line x1="0" y1="33" x2="110" y2="33"/>
+      </g>
+    </g>
+    <line x1="590" y1="500" x2="580" y2="540" stroke="#555" stroke-width="6"/>
+    <line x1="650" y1="480" x2="662" y2="536" stroke="#555" stroke-width="6"/>
+    <g transform="translate(680,452) rotate(14)">
+      <rect width="92" height="56" rx="4" fill="#14335c" stroke="#0a1f3a" stroke-width="3"/>
+      <g stroke="#4f83c0" stroke-width="2">
+        <line x1="23" y1="0" x2="23" y2="56"/><line x1="46" y1="0" x2="46" y2="56"/>
+        <line x1="69" y1="0" x2="69" y2="56"/><line x1="0" y1="28" x2="92" y2="28"/>
+      </g>
+    </g>
+    <line x1="722" y1="520" x2="730" y2="552" stroke="#555" stroke-width="6"/>
+    <!-- cable: panels -> blaster, sun-charged -->
+    <path d="M600 545 Q520 585 452 552" fill="none" stroke="#222" stroke-width="4"/>
+    <path d="M540 566 l-14 16 h11 l-9 18 22 -22 h-11 l10 -14 z" fill="#ffd93b" stroke="#a87b00" stroke-width="1.5"/>
+  </g>
+  <!-- getto-blaster -->
+  <g>
+    <rect x="250" y="470" width="200" height="90" rx="10" fill="#2b2b2b" stroke="#111" stroke-width="4"/>
+    <path d="M290 470 Q350 435 410 470" fill="none" stroke="#111" stroke-width="8"/>
+    <circle cx="296" cy="515" r="27" fill="#cfd6dd" stroke="#111" stroke-width="4"/>
+    <circle cx="296" cy="515" r="12" fill="#333"/>
+    <circle cx="404" cy="515" r="27" fill="#cfd6dd" stroke="#111" stroke-width="4"/>
+    <circle cx="404" cy="515" r="12" fill="#333"/>
+    <rect x="330" y="498" width="42" height="24" rx="3" fill="#8a5a2b" stroke="#111" stroke-width="3"/>
+    <circle cx="341" cy="510" r="4" fill="#111"/><circle cx="361" cy="510" r="4" fill="#111"/>
+    <line x1="282" y1="470" x2="266" y2="416" stroke="#111" stroke-width="4"/>
+    <circle cx="265" cy="412" r="5" fill="#e03131"/>
+    <line x1="420" y1="470" x2="440" y2="408" stroke="#111" stroke-width="4"/>
+    <circle cx="441" cy="404" r="5" fill="#e03131"/>
+    <g stroke="#ffd93b" stroke-width="3" fill="none" stroke-linecap="round">
+      <path d="M470 480 q14 10 0 22"/><path d="M480 470 q22 18 0 40"/>
+    </g>
+  </g>
+</svg>
+
+<div class="card">
+  <h1>solar-ctl update</h1>
+  <p class="sub">Signed .swu only — installs to the <b>inactive</b> slot, arms the
+     bootenv switch, reboots on success. Sun-powered; rollback one boot away.</p>
+  <form id="up" action="/upload" method="post" enctype="multipart/form-data">
+    <input type="file" name="swu" accept=".swu" required>
+    <button id="go" type="submit">Push update</button>
+  </form>
+  <div class="bar"><div id="fill"></div></div>
+  <pre id="log">waiting…</pre>
+  <p class="note">CLI equivalent: <code>curl -F "swu=@fw.swu" http://&lt;board&gt;:8080/upload</code></p>
+</div>
+
+<script>
+const log = document.getElementById('log'), fill = document.getElementById('fill'),
+      go = document.getElementById('go');
+function line(t){ log.textContent += "\n" + t; log.scrollTop = log.scrollHeight; }
+const ws = new WebSocket("ws://" + location.host + "/ws");
+ws.onmessage = (m) => {
+  let d; try { d = JSON.parse(m.data); } catch(_) { line(m.data); return; }
+  if (typeof d.percent === "number") fill.style.width = d.percent + "%";
+  line((d.msg || d.message || m.data));
+  if (d.success === true || /SUCCESS/i.test(m.data)) line("** rebooting to new slot **");
+};
+ws.onopen  = () => log.textContent = "progress link up.";
+ws.onerror = () => line("(websocket error — update still proceeds, watch the LEDs)");
+document.getElementById('up').addEventListener('submit', () => {
+  go.disabled = true; fill.style.width = "2%"; log.textContent = "uploading…";
+});
+</script>
+</body>
+</html>
