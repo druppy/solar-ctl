@@ -399,8 +399,10 @@
   `CONFIG_IPV6 is not set` (2026-10-06 user decision: nothing here speaks v6),
   so v6 listeners would be dead weight, and web TLS is pointless when the
   artifact is signed — no cert plumbing. Mongoose is vendored → zero new
-  DEPENDS. Web root ships as our own single-file `/usr/share/solar-swu-web
-  /index.html` (upload form + WS progress + beach SVG); `swupdate-www` is NOT
+  DEPENDS. Web root ships as our own `/usr/share/solar-swu-web/` = our
+  `index.html` (upload form + WS progress) + `swupdate_background.png`
+  ("blue eyes Tux", 236 KB PNG, referenced by relative URL so mongoose
+  serves it from the docroot — no server plumbing); `swupdate-www` is NOT
   installed. `swupdate-client` (swclient) IS. **Firewall**: `solar-firewall`
   recipe (fw/recipes-support/solar-firewall) = `/etc/nftables/solar.nft` +
   oneshot unit Before=network-pre.target (atomic `nft -f`, starts with `flush
@@ -914,6 +916,40 @@
   **std::cmatch** — `smatch` is `string::const_iterator`-based and
   will not bind (GCC 16 spelled it out; the build failing silently
   left ctest replaying the stale binary as a false 10/10).
+- **The UI lives in logical LANDSCAPE 428x142** (bench-verified fbdump
+  calibration 2026-10-07): the fb backend applies `--rotate 90` (default), so
+  LVGL's layout space is 428 wide x 142 tall even though /dev/fb0 is 142x428
+  portrait. Layout constants MUST use landscape coords — a portrait-designed
+  upgrade page (arc TOP_MID y=60, label y=200) landed 34px-clipped and
+  label-off-screen; only caught on the bench. watch.cpp's idiom is canonical:
+  round gauge LEFT_MID, text block to its right. fbdump evidence is raw fb =
+  rotated content: `magick shot.png -rotate 90` (clockwise) = the user view.
+  Capture during OTA: loop fbdump ON the board into `/data/shots/` (survives
+  the install-reboot; /tmp does not); status page is visible only ~12-15 s.
+  Jitter check: label text-block bbox must be identical across consecutive
+  frames except right-edge growth; "Restarting" frames were byte-identical
+  md5 across two separate uploads.
+- **Progress percent is composed, never raw** (user-visible sawtooth fixed
+  2026-10-07): SWUpdate feeds TWO parallel axes per pinned sources —
+  `dwl_percent` = share of the archive streamed into the install pipe
+  (mongoose `write()`s each multipart chunk straight to the installer, the
+  upload IS streamed, no temp file), and `cur_percent` = percent of the
+  CURRENT image, reset to 0 by `swupdate_progress_inc_step` for every image
+  of the set (ours has 2: rootfs + uImage). Displaying one raw axis per
+  message made the arc rewind at every alternation; `overall_percent(msg,
+  prev)` (update.cpp, unit-tested) composes `max(dwl, (done_steps*100 +
+  cur)/nsteps)` and clamps monotonic (reset on START). `nsteps` is final at
+  sw-description parse (parser.c counts set images; no addstep caller in
+  2026.05.1), so `cur_step == nsteps` = "last image running", NOT done.
+  Status line shows a CALM phase word (`phase_name`: Starting/Receiving/
+  Installing + `cur_step/nsteps`) — rendering the raw alternating tokens
+  made the label flap several times a second (user: "stressful to watch",
+  fixed 2026-10-07); raw tokens go to the journal via the Updater's
+  log_msg. Label-line stability proof: crop the state text band from
+  rotated fbdump frames — md5-identical across the whole install. PITFALL for verifying
+  any UI change over OTA: the progress page is rendered by the ACTIVE slot's
+  inv-ctl, so the upload that carries a UI fix never shows it — capture
+  frames during the NEXT upload (costs one extra cycle).
 - inv_ctl board identity (added 2026-10-06): status panel shows
   `/sys/firmware/devicetree/base/{model,serial-number}` (bench capture:
   each file is ONE NUL-terminated string, no newline — parser also
