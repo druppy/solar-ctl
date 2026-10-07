@@ -56,9 +56,17 @@ Action action_for(const progress_msg & msg);
 std::string_view state_name(std::uint32_t status);
 std::string_view source_name(std::uint32_t source);
 
-/* Streaming counts with dwl_percent, install steps with cur_percent;
- * clamped to the 0..100 the arc can draw. */
-unsigned percent_for(const progress_msg & msg);
+
+/* One honest bar out of the daemon's TWO parallel axes (core/
+ * progress_thread.c): dwl_percent = share of the archive streamed into
+ * the install pipe; cur_percent = percent of the CURRENT image
+ * (swupdate_progress_inc_step resets it to 0 per image of the set).
+ * Neither alone is "the upgrade's progress": picking one per status made
+ * the arc walk backwards at every axis switch. Combine them: the image
+ * overall is ((cur_step-1)*100 + cur_percent)/nsteps, the visible value
+ * is whichever axis is ahead, and it never decreases below `prev`
+ * (pass the previous return value; reset it on START). */
+unsigned overall_percent(const progress_msg & msg, unsigned prev);
 
 /* Socket path: on the target this IS the daemon's get_prog_socket(),
  * linked from libswupdate. TRAP: that function resolves from the

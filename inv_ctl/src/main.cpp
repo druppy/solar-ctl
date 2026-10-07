@@ -179,16 +179,33 @@ int main(int argc, char * argv[])
      * cancelling a connect_once needs a connection handle, and that handle
      * type is glibmm-generation dependent (2.66 target vs 2.90 host). */
     unsigned ota_gen = 0;
-    updater.start([&upgrade, main_screen, &ota_gen](const progress_msg & m) {
+    /* Monotonic composition of the daemon's two percent axes (see
+     * overall_percent); reset when a new install announces itself. */
+    unsigned overall = 0;
+    updater.start([&upgrade, main_screen, &ota_gen, &overall](const progress_msg & m) {
         switch (action_for(m)) {
         case Action::Ignore:
             break; /* logged by the Updater (info payloads included) */
-        case Action::Upgrade:
+        case Action::Upgrade: {
             ++ota_gen;
+            if (m.status == START)
+                overall = 0;
+            overall = overall_percent(m, overall);
             if (lv_screen_active() != upgrade.screen)
                 lv_screen_load(upgrade.screen);
-            upgrade_status(upgrade, state_name(m.status), percent_for(m));
+            /* Raw state token plus the step counter, so the alternating
+             * DOWNLOAD/PROGRESS messages read as one story on the fixed-
+             * width label (the arc shows the composed percent). */
+            string state(state_name(m.status));
+            if (m.cur_step > 0 && m.nsteps > 0) {
+                state += " ";
+                state += to_string(m.cur_step);
+                state += '/';
+                state += to_string(m.nsteps);
+            }
+            upgrade_status(upgrade, state, overall);
             break;
+        }
         case Action::Succeeded:
             ++ota_gen;
             lv_screen_load(upgrade.screen);

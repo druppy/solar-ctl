@@ -164,20 +164,53 @@ TEST_CASE("UI action mapping")
     CHECK(action_for(*parse_progress_msg(msg_span(m))) == Action::Ignore); /* log, don't act */
 }
 
-TEST_CASE("percent selection and clamping")
+TEST_CASE("overall percent: two axes composed, never backwards")
 {
+    /* Real daemon behaviour (progress_thread.c): dwl_percent runs 0..100
+     * while the archive streams in; cur_percent restarts at 0 for every
+     * image of the set (here 2: rootfs + kernel). The old per-status pick
+     * made the arc rewind at each alternation. */
     progress_msg m = make_msg();
-    m.dwl_percent = 30;
-    m.cur_percent = 90;
+    m.nsteps = 2;
+
+    m.status = START; /* cur_step 0: nothing running yet */
+    CHECK(overall_percent(*parse_progress_msg(msg_span(m)), 0) == 0u);
 
     m.status = DOWNLOAD;
-    CHECK(percent_for(*parse_progress_msg(msg_span(m))) == 30u);
+    m.dwl_percent = 40;
+    m.cur_step = 1;
+    m.cur_percent = 40; /* rootfs streaming, paced by the installer */
+    CHECK(overall_percent(*parse_progress_msg(msg_span(m)), 35) == 40u);
+
+    /* Axes alternate; during the big rootfs the dwl axis leads by design
+     * (each step counts equal share, so install-overall lags behind). */
+    m.status = PROGRESS;
+    m.dwl_percent = 70;
+    m.cur_percent = 70;
+    CHECK(overall_percent(*parse_progress_msg(msg_span(m)), 40) == 70u);
+
+    /* Rootfs done, kernel (end of archive) starts: dwl ~98 (the 1 MB
+     * uImage is the remaining 2%), cur_percent resets to 0 — a raw
+     * per-axis display would rewind here; the clamp holds. */
     m.status = RUN;
-    CHECK(percent_for(*parse_progress_msg(msg_span(m))) == 90u);
+    m.cur_step = 2;
+    m.cur_percent = 0;
+    m.dwl_percent = 98;
+    CHECK(overall_percent(*parse_progress_msg(msg_span(m)), 70) == 98u);
 
-    m.dwl_percent = 65535; /* the arc maxes at 100 */
-    m.status = DOWNLOAD;
-    CHECK(percent_for(*parse_progress_msg(msg_span(m))) == 100u);
+    /* Tail: kernel flushes after the stream - step axis catches up. */
+    m.status = PROGRESS;
+    m.cur_percent = 60; /* install overall = (100 + 60) / 2 = 80 < 98 */
+    CHECK(overall_percent(*parse_progress_msg(msg_span(m)), 98) == 98u);
+    m.cur_percent = 100;
+    CHECK(overall_percent(*parse_progress_msg(msg_span(m)), 0) == 100u);
+
+    /* Clamps: wild wire values must still land in 0..100. */
+    m.dwl_percent = 65535;
+    m.cur_percent = 65535;
+    CHECK(overall_percent(*parse_progress_msg(msg_span(m)), 0) == 100u);
+    m.cur_step = 999; /* nonsense index saturates, never overflows */
+    CHECK(overall_percent(*parse_progress_msg(msg_span(m)), 0) == 100u);
 }
 
 TEST_CASE("state and source names")

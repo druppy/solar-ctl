@@ -113,12 +113,24 @@ string_view source_name(uint32_t source)
     }
 }
 
-unsigned percent_for(const progress_msg & msg)
+unsigned overall_percent(const progress_msg & msg, unsigned prev)
 {
-    /* Streaming (the long phase while we install over HTTP) counts with
-     * dwl_percent; an install step counts with cur_percent. */
-    const unsigned pct = (msg.status == DOWNLOAD) ? msg.dwl_percent : msg.cur_percent;
-    return min(pct, 100u);
+    /* Image overall: cur_step is the 1-based index of the running image
+     * (core/progress_thread.c swupdate_progress_inc_step), so completed
+     * images are cur_step - 1. */
+    unsigned install = 0;
+    if (msg.cur_step > 0 && msg.nsteps > 0) {
+        /* nsteps is final at sw-description parse time (parser.c counts the
+         * set's images before progress_init; nothing calls addstep here), so
+         * cur_step == nsteps legitimately means "last image running". */
+        const unsigned long long done = 100ull * (msg.cur_step - 1u);
+        install = static_cast<unsigned>(
+            min(100ull, (done + min(msg.cur_percent, 100u)) / msg.nsteps));
+    }
+    /* dwl leads while the stream paces the install; the step overall leads
+     * in the tail, when the last image flushes after the stream is done. */
+    const unsigned now = max(min(msg.dwl_percent, 100u), install);
+    return max(now, min(prev, 100u));
 }
 
 string prog_socket_path()
