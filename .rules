@@ -219,7 +219,9 @@
   `fw/tools/fb-dump.sh` wraps it host-side (thin ssh wrapper; errors
   cleanly on images predating the tool). Unit tests (added 2026-10-06):
   platform Catch2 (`find_package(Catch2 3 REQUIRED)` +
-  `Catch2::Catch2WithMain`, CI apt `libcatch2-dev`) — never FetchContent
+  `Catch2::Catch2WithMain`, CI apt `catch2` on noble — the single
+  package carries headers + CMake config + static libs; there is no
+  `libcatch2-dev` in Ubuntu) — never FetchContent
   (user policy 2026-10-07: LVGL is the only thing CMake may fetch),
   `FBDUMP_BUILD_TESTS` default OFF (Yocto never sees Catch2), CI `fbdump`
   job in firmware.yml.
@@ -896,7 +898,8 @@
 - inv_ctl unit tests (added 2026-10-02): CTest + Catch2 v3 from the
   platform (`find_package(Catch2 3 REQUIRED)`, link
   `Catch2::Catch2WithMain`, includes `<catch2/catch_test_macros.hpp>`;
-  CI apt `libcatch2-dev` — since 2026-10-07 NO FetchContent anywhere,
+  CI apt `catch2` (noble has no `libcatch2-dev` — apt failed loudly on
+  2026-10-07) — since 2026-10-07 NO FetchContent anywhere,
   LVGL is the only fetched dep), harness gated by `INV_CTL_BUILD_TESTS`
   (default OFF — the Yocto build never sees Catch2) and
   `INV_CTL_BUILD_UI=OFF` (skips glibmm/SDL2/LVGL entirely — net.cpp is libc
