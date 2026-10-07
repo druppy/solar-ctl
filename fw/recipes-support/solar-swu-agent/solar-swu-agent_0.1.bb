@@ -19,6 +19,7 @@ SRC_URI = " \
     file://solar-swupdate-server \
     file://solar-swupdate.service \
     file://index.html \
+    file://swupdate_background.png \
     file://solar-cores-seed \
     file://solar-cores-seed.service \
     file://solar-swupdate-progress.service \
@@ -46,6 +47,8 @@ do_install() {
     install -m 0755 ${S}/solar-swupdate-server ${D}${libexecdir}/solar-swupdate-server
     install -m 0644 ${S}/solar-swupdate.service ${D}${systemd_system_unitdir}/
     install -m 0644 ${S}/index.html ${D}${datadir}/solar-swu-web/index.html
+    install -m 0644 ${S}/swupdate_background.png \
+        ${D}${datadir}/solar-swu-web/swupdate_background.png
     install -m 0755 ${S}/solar-cores-seed ${D}${libexecdir}/solar-cores-seed
     install -m 0755 ${S}/solar-swu-reboot ${D}${libexecdir}/solar-swu-reboot
     install -m 0644 ${S}/solar-cores-seed.service ${D}${systemd_system_unitdir}/
@@ -63,7 +66,9 @@ do_install() {
 # systemctl wrapper at rootfs assembly (works on the RO rootfs).
 SYSTEMD_SERVICE:${PN} = "solar-cores-seed.service solar-swupdate-progress.service boot.mount solar-swupdate.service"
 
-# web root for the HTTP server (mongoose document root; index.html only)
+# web root for the HTTP server (mongoose document root: index.html +
+# its "blue eyes Tux" background PNG, referenced by relative URL so no
+# server change is needed - mongoose serves any docroot file statically).
 FILES:${PN} += "${datadir}/solar-swu-web"
 
 RDEPENDS:${PN} += "swupdate swupdate-progress libubootenv-bin"
