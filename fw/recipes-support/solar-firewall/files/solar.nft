@@ -1,0 +1,40 @@
+#!/usr/sbin/nft -f
+# solar-ctl input filter. 'table ip', not 'inet': CONFIG_IPV6 is not set in
+# our kernel (solar-ctl-slim.cfg), so the inet family simply does not exist -
+# do NOT "modernise" this to 'table inet', NF_TABLES_INET depends on IPV6.
+# IPv4 only: the whole IPv6 stack does not exist in this kernel.
+#
+# Trust model: port 8080 being open means anyone on the LAN can PUSH bytes;
+# installing is gated by the RSA signature (signed-images build, -k pubkey
+# in the daemon) and by the -e/-q slot pinning - a push can only ever hit
+# the INACTIVE slot. There is no upload size cap in swupdate's webserver.
+flush ruleset
+
+table ip solar {
+	chain input {
+		type filter hook input priority filter; policy drop;
+
+		iif "lo" accept
+		ct state established,related accept
+
+		# DHCP replies BEFORE the invalid-drop: after a reboot conntrack is
+		# empty - the client probes 0.0.0.0:68 -> 255.255.255.255:67, and the
+		# server's reply to the not-yet-owned yiaddr is not a reply of that
+		# tracked flow, so it never matches established,related (bench
+		# 2026-10-06: this exact ruleless-by-omission made the board boot
+		# fine but vanish from the LAN - no lease, no route to host).
+		udp sport 67 udp dport 67 accept
+		udp sport 67 udp dport 68 accept
+
+		ct state invalid drop
+
+		# ping: bench reachability checks
+		icmp type echo-request accept
+
+		# dropbear (-s: key-only, see /etc/default/dropbear)
+		tcp dport 22 accept
+
+		# swupdate HTTP server (solar-swu-agent); signature is the gate
+		tcp dport 8080 accept
+	}
+}

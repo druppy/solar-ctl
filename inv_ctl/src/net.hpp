@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 /* Wi-Fi / network status for the status panel, read via ioctl + procfs
  * (no extra runtime deps; every field degrades to "--"/unlinked when the
@@ -12,4 +13,4 @@ struct NetStatus {
     bool linked = false;
 };
 
-void net_refresh(NetStatus & status, const std::string & ifname);
+void net_refresh(NetStatus & status, std::string_view ifname);

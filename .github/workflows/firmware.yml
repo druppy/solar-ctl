@@ -29,11 +29,21 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install host deps
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build catch2
+
+      # swupdate is never a fetched dependency: unpack the pinned 2026.05.1
+      # headers (same SRCREV meta-swupdate builds) and hand CMake the path.
+      - name: Stage swupdate protocol headers
+        run: |
+          curl -fsSL -o swu.tar.gz \
+            https://github.com/sbabic/swupdate/archive/9000ecb52677da7d9676a61b729bab57dba99674.tar.gz
+          mkdir -p swupdate && tar -xzf swu.tar.gz -C swupdate --strip-components=1 \
+            swupdate-9000ecb52677da7d9676a61b729bab57dba99674/include
+          echo "SWU_INC=$PWD/swupdate/include" >> "$GITHUB_ENV"
 
       # UI OFF: no glibmm/SDL2/LVGL needed - net.cpp is pure libc + syscalls.
       - name: Configure (tests only)
-        run: cmake -S inv_ctl -B build-tests -G Ninja -DINV_CTL_BUILD_UI=OFF -DINV_CTL_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+        run: cmake -S inv_ctl -B build-tests -G Ninja -DINV_CTL_BUILD_UI=OFF -DINV_CTL_BUILD_TESTS=ON -DINV_CTL_SWUPDATE_INCLUDE=$SWU_INC -DCMAKE_BUILD_TYPE=Debug
 
       - name: Build tests
         run: cmake --build build-tests --target inv_ctl_tests
@@ -60,6 +70,47 @@ jobs:
         with:
           name: inv_ctl unit tests
           path: inv-ctl-junit.xml
+          reporter: java-junit
+          use-actions-summary: true
+          fail-on-error: false # display only; ctest is the gate
+
+  # Fast native unit tests (fbdump): the hand-rolled PNG/zlib/base64 core
+  # has no library to vouch for it, so the vectors + golden PNG are the gate.
+  # Tests OFF by default - the Yocto build never needs Catch2 at all.
+  fbdump:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write # dorny/test-reporter posts the report to this job's summary
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install host deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build catch2
+
+      - name: Configure (tests on)
+        run: cmake -S fbdump -B build-tests-fbdump -G Ninja -DFBDUMP_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build tests
+        run: cmake --build build-tests-fbdump --target fbdump_tests
+
+      - name: ctest
+        run: ctest --test-dir build-tests-fbdump --output-on-failure
+
+      # Same JUnit-after-gate pattern as the inv-ctl job (report only).
+      - name: JUnit XML
+        if: ${{ !cancelled() }}
+        run: |
+          [ -x build-tests-fbdump/fbdump_tests ] && \
+            ./build-tests-fbdump/fbdump_tests --reporter Junit --out fbdump-junit.xml || true
+
+      - name: Publish report to job summary
+        if: ${{ !cancelled() && hashFiles('fbdump-junit.xml') != '' }}
+        uses: dorny/test-reporter@v3
+        with:
+          name: fbdump unit tests
+          path: fbdump-junit.xml
           reporter: java-junit
           use-actions-summary: true
           fail-on-error: false # display only; ctest is the gate
@@ -228,7 +279,12 @@ jobs:
             grep -qx 'CONFIG_BOOTLOADERHANDLER=y' "$cfg" || { echo "::error::$cfg lost CONFIG_BOOTLOADERHANDLER (bootenv image handler missing - parser rejects the .swu!)"; fail=1; }
             grep -qx 'CONFIG_DOWNLOAD=y' "$cfg" || { echo "::error::$cfg lost CONFIG_DOWNLOAD (-u fetch)"; fail=1; }
             grep -qx 'CONFIG_DOWNLOAD_SSL=y' "$cfg" || { echo "::error::$cfg lost CONFIG_DOWNLOAD_SSL (https fetch)"; fail=1; }
-            for off in CONFIG_MTD CONFIG_WEBSERVER CONFIG_LUA CONFIG_SCRIPTS CONFIG_SURICATTA; do
+            # HTTP install server (2026-10-06): mongoose webserver must be in,
+            # but WITHOUT v6 (kernel has CONFIG_IPV6 off) and WITHOUT web TLS
+            # (signature is the gate; no cert plumbing on the bench).
+            grep -qx 'CONFIG_WEBSERVER=y' "$cfg" || { echo "::error::$cfg lost CONFIG_WEBSERVER (HTTP install server)"; fail=1; }
+            grep -qx 'CONFIG_MONGOOSE=y' "$cfg" || { echo "::error::$cfg lost CONFIG_MONGOOSE (only webserver impl)"; fail=1; }
+            for off in CONFIG_MTD CONFIG_LUA CONFIG_SCRIPTS CONFIG_SURICATTA CONFIG_MONGOOSEIPV6 CONFIG_MONGOOSESSL; do
               grep -qx "${off}=y" "$cfg" && { echo "::error::$cfg has $off=y (fragment not applied?)"; fail=1; }
             done
           done

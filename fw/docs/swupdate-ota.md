@@ -2,7 +2,13 @@
 
 **Status: design record + compile gate PASSED + bench tests 0–5 DONE (test 5
 PASS 2026-09-25: U-Boot A/B milestone image validated end-to-end) + signed
-single-file `.swu` flow IMPLEMENTED in-tree (2026-09-28, pending bench).**
+single-file `.swu` flow IMPLEMENTED in-tree (2026-09-28, pending bench).
+2026-10-05: the U-Boot env moved off the p1 FAT file into a hidden raw
+redundant pair (raw redundant pair, `ENV_IS_IN_MMC` + `ENV_REDUNDANT`);
+every "`uboot.env` on p1" statement below is superseded — see
+[`ab-boot-uboot.md`](ab-boot-uboot.md) card layout + traps; the `.swu`
+payload and the SWUpdate side are unchanged (same libubootenv, rewritten
+`/etc/fw_env.config`).**
 Plan of record: **per-slot kernel via U-Boot
 (Tier 3)** — one slot = one kernel + modules + root (§5). Branch
 `swupdate_setup`. SWUpdate builds on musl (`[ci]` run 35926622985).
@@ -804,6 +810,96 @@ Kernel overlay `solar-rs485` takes the pins after `bootz`.
 is **per-slot kernel via U-Boot** (§5). Condition (a) is true (`kernel=` not
 honoured). Condition (b) was the wrong question — we do not give up RS485; we
 keep the transceiver quiet until Linux.
+
+---
+
+### 6.8 HTTP install server + firewall (implemented 2026-10-06)
+
+The pull flow (`solar-update -d "-u …"`) is great when the device can reach
+the artifact; the push path was missing — every install needed someone to
+shell in and compose `-e stable,<set> -k <key>` correctly. Since 2026-10-06
+`swupdate` runs as a **daemon** (`solar-swupdate.service`, solar-swu-agent)
+serving HTTP on **:8080**, and `solar-firewall` (nftables) makes 22 and 8080
+the only reachable ports at all.
+
+**The three gates, verified against 2026.05.1 sources** (`SRCREV 9000ecb5`):
+
+| gate | mechanism | source evidence |
+|---|---|---|
+| key | `-k /etc/solar/swupdate.pub.pem` at daemon start; a SIGNED_IMAGES build **refuses to start** without it | `core/swupdate.c` (`public_key_mandatory` check) |
+| set | uploads carry no software set → the daemon's `-e stable,<inactive>` applies; `-q stable,<inactive>` rejects any client-proposed set not on the list | `core/stream_interface.c` (request-borne set overrides, empty keeps daemon's), `core/network_thread.c` (`is_selection_allowed`) |
+| HW rev | needs no flag: `check_hw_compatibility()` runs inside the stream parse against `/etc/hwrevision` | `core/stream_interface.c:231` |
+
+Slot derivation happens at **service start** (root= → inactive set, same
+mapping as `solar-update`) and is stable for the boot: success reboots, so
+the daemon can never target the partition it runs from. Reboot-on-SUCCESS is
+NOT the daemon's job — the existing `solar-swupdate-progress.service` →
+`/usr/libexec/solar-swu-reboot` contract covers server installs exactly like
+CLI ones (the progress server starts on every run).
+
+**Mongoose facts** (its Kconfig is the `WEBSERVER` menu): binds `:8080`
+(`-p`), `MONGOOSEIPV6` **off** (kernel `CONFIG_IPV6 is not set` → no v6
+stack, no AF_INET6 listener), `MONGOOSESSL` **off** (plain HTTP — the
+signature, not TLS, is the gate), vendored `mongoose.c` adds **zero new
+DEPENDS**, and the upload path is a single multipart POST to **`/upload`**
+(plus a websocket broadcast of progress on any URI). No `swupdate-www`
+shipped: the document root is our own `/usr/share/solar-swu-web/index.html`
+(one self-contained file — upload form + WS progress bar + a beach scene,
+because firmware deserves one).
+
+**Trust model.** Port 8080 open to the LAN means anyone can *push*; nobody
+can *install*: unsigned streams die in the checker mid-stream, and the only
+destination the daemon accepts is the inactive slot (+ HW-compat + signature
+from the signed sw-description). There is **no upload size cap** — swupdate
+has none (only `-t 30` idle watchdog); worst case a malicious push costs
+bandwidth and SD writes into a slot that will never boot unsigned.
+
+**Firewall** (`solar-firewall`, nftables from meta-networking): `solar.nft`
+is a `table ip` (**not** `inet` — NF_TABLES_INET depends on IPV6, which we
+killed) with `policy drop`, accepting lo, `ct state established,related`,
+DHCP replies (`udp sport 67 dport 67/68` — **mandatory before the
+invalid-drop**: a post-reboot client probes from `0.0.0.0`, so the server's
+reply to the new yiaddr is not a tracked reply — without these two rules the
+board boots but silently never gets a lease; learned the hard way on the
+bench 2026-10-06), ICMP echo, tcp/22, tcp/8080. Kernel side is `=y` in `solar-ctl-slim.cfg`
+(NF_TABLES, NF_TABLES_IPV4, NF_CONNTRACK, NFT_CT) — built-in, no module
+loading, no `kernel-module-*` packages, `nft -f` is atomic. Rules load
+`Before=network-pre.target`, so there is no open window at boot; the swupdate
+service is `After=solar-firewall.service` as belt.
+
+**Usage:** browser on `http://<board>:8080/` (form + live progress),
+`curl -F file=@fw.swu http://192.168.0.53:8080/upload` from a laptop (the
+upload handler takes **any** multipart file part - the field name is not
+checked, `mongoose_interface.c` streams `mp->part.filename`; an optional
+`set=stable,X` form field is honoured only if X passes `-q`), or
+`swupdate-client fw.swu` on the board itself. The CLI pull flow
+(`solar-update -d …`) stays untouched.
+
+**Bench 2026-10-06 (first live run).** Full round proven over HTTP:
+upload 43 MB from laptop → server responds `Ok, <name> - N bytes` → install
+to standby + `bootenv` slot write + SUCCESS → **auto-reboot via the progress
+contract** → board returns on the other slot with `slot=b` in the env and
+the daemon re-derived to `accepting ONLY set 'stable,main'`. Denial string
+for a wrong-set client: `Selection stable,main is not allowed, rejected !`
+(journal). Two plumbing bugs found and fixed by this run:
+
+1. `solar-swupdate.service` ordered `After=network-online.target` — but
+   `systemd-networkd-wait-online` **hangs forever** on this image
+   (`TimeoutStartSec=infinity`, networkd manages **no** link — DHCP is
+   busybox `udhcpc`), holding `multi-user.target` hostage so the server
+   (and everything else gated there) never started. Fix: the unit now uses
+   plain `network.target`, and the image unenables wait-online entirely
+   (`solar_ab_drop_wait_online` postprocess in `solar-ctl-image.bb`).
+2. `swupdate-client /tmp/new.swu` (no flags) on the board works
+   end-to-end — status stream `Software Update started → Installation in
+   progress → SWUPDATE successful → Waiting for requests...`, rc 0, then
+   the progress-hook reboot. Its earlier `swupdate_async_start returns -1`
+   was NOT a missing-IPC failure: it is exactly what the client reports
+   when the server REJECTS the stream (the `-q` denial above). Same
+   artifact then deployed client-side B→A while the server ran on B:
+   reboots into slot a with `slot=a`, zero pending jobs, server and
+   firewall `active`, daemon on `stable,main` — the first fully image-
+   native HTTP deployment (no drop-ins, no manual steps).
 
 ---
 

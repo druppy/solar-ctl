@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>solar-ctl — SWUpdate</title>
+<style>
+  html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+  body { display: flex; align-items: center; justify-content: center;
+         background: #05070f url("swupdate_background.png") center/cover no-repeat fixed; }
+  .card { background: rgba(255,255,255,.88); border-radius: 14px; padding: 22px 26px;
+          max-width: 420px; width: calc(100% - 40px); box-shadow: 0 8px 30px rgba(0,40,80,.35); }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  p.sub { margin: 0 0 14px; color: #456; font-size: .85rem; }
+  input[type=file] { width: 100%; margin-bottom: 10px; }
+  button { width: 100%; padding: 10px; border: 0; border-radius: 8px; cursor: pointer;
+           background: #0b7285; color: #fff; font-size: 1rem; }
+  button:disabled { background: #999; }
+  .bar { height: 12px; background: #dde; border-radius: 6px; margin: 14px 0 8px;
+         overflow: hidden; }
+  .bar > div { height: 100%; width: 0%; background: #2f9e44; transition: width .4s; }
+  pre { background: #12242e; color: #b8e6c8; font-size: .7rem; padding: 8px;
+        border-radius: 6px; height: 130px; overflow-y: auto; white-space: pre-wrap; }
+  .note { font-size: .7rem; color: #678; margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h1>solar-ctl update</h1>
+  <p class="sub">Signed .swu only — installs to the <b>inactive</b> slot, arms the
+     bootenv switch, reboots on success. Sun-powered; rollback one boot away.</p>
+  <form id="up" action="/upload" method="post" enctype="multipart/form-data">
+    <input type="file" name="swu" accept=".swu" required>
+    <button id="go" type="submit">Push update</button>
+  </form>
+  <div class="bar"><div id="fill"></div></div>
+  <pre id="log">waiting…</pre>
+  <p class="note">CLI equivalent: <code>curl -F "swu=@fw.swu" http://&lt;board&gt;:8080/upload</code></p>
+</div>
+
+<script>
+const log = document.getElementById('log'), fill = document.getElementById('fill'),
+      go = document.getElementById('go');
+function line(t){ log.textContent += "\n" + t; log.scrollTop = log.scrollHeight; }
+const ws = new WebSocket("ws://" + location.host + "/ws");
+ws.onmessage = (m) => {
+  let d; try { d = JSON.parse(m.data); } catch(_) { line(m.data); return; }
+  if (typeof d.percent === "number") fill.style.width = d.percent + "%";
+  line((d.msg || d.message || m.data));
+  if (d.success === true || /SUCCESS/i.test(m.data)) line("** rebooting to new slot **");
+};
+ws.onopen  = () => log.textContent = "progress link up.";
+ws.onerror = () => line("(websocket error — update still proceeds, watch the LEDs)");
+document.getElementById('up').addEventListener('submit', () => {
+  go.disabled = true; fill.style.width = "2%"; log.textContent = "uploading…";
+});
+</script>
+</body>
+</html>

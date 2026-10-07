@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+using namespace std;
+
 namespace {
 
 constexpr int kDial = 130;               /* fits the 142 px panel width */
@@ -32,9 +34,12 @@ void make_ticks(lv_obj_t * dial)
         constexpr double r = kCenter - 9.0;
         lv_obj_t * tick = lv_obj_create(dial);
         lv_obj_remove_style_all(tick);
-        lv_obj_set_size(tick, 3, (i % 3 == 0) ? 10 : 6);
-        const int x = static_cast<int>(kCenter + r * std::sin(angle) - 1.5);
-        const int y = static_cast<int>(kCenter - r * std::cos(angle) - 5);
+        /* The 12 marker is one pixel wider than the other quarter ticks:
+         * glanceable proof that the dial shares the text orientation. */
+        const int w = (i == 0) ? 4 : 3;
+        lv_obj_set_size(tick, w, (i % 3 == 0) ? 10 : 6);
+        const int x = static_cast<int>(kCenter + r * sin(angle) - w / 2.0);
+        const int y = static_cast<int>(kCenter - r * cos(angle) - 5);
         lv_obj_set_pos(tick, x, y);
         lv_obj_set_style_bg_color(tick, lv_color_hex(0x8b98a5), 0);
         lv_obj_set_style_bg_opa(tick, LV_OPA_COVER, 0);

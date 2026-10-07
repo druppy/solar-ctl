@@ -82,19 +82,32 @@ IMAGE_INSTALL:append = " \
 # started as inv-ctl.service.
 IMAGE_INSTALL:append = " inv-ctl"
 
+# On-device screenshot tool (fbdump/): /dev/fb0 -> PNG to file or stdout,
+# zero deps. 'ssh board fbdump > shot.png' = eyes on glass from the laptop.
+IMAGE_INSTALL:append = " solar-fbdump"
+
 # --- A/B OTA milestone (doc swupdate-ota.md §5, §10 step 4) ---------------
-# Layout: p1 vfat (GPU fw + U-Boot + per-slot kernel) + p2/p3 squashfs-xz
-# root slots + p4 ext4 /data. The wks is found via WKS_SEARCH_PATH
-# (files/wic/ of this layer) and overrides rpi-base.inc's WKS_FILE ?=.
-WKS_FILE = "solar-ctl-ab.wks"
+# Layout: p1 vfat (GPU fw + U-Boot) + hidden raw U-Boot env area + p2/p3
+# squashfs-xz root slots + p4 ext4 /data. The wks is found via
+# WKS_SEARCH_PATH (files/wic/ of this layer) and overrides rpi-base.inc's
+# WKS_FILE ?=. It is a TEMPLATE: image_types_wic expands the geometry
+# constants of solar-ablayout.bbclass (the single source shared with the
+# u-boot env fragment and fw_env.config) into the build dir at build time.
+inherit solar-ablayout
+WKS_FILE = "solar-ctl-ab.wks.in"
 
 # p1 keeps the top-level uImage (from RPI_EXTRA_IMAGE_BOOT_FILES) ONLY as
 # the factory fallback: the real per-slot kernels live on ext4 /data
 # (/data/cores/slot-{a,b}/uImage, loaded by boot.scr via ext4load) so the
-# kernel is OTA-able without touching FAT. uboot.env is the pre-seeded
-# libubootenv blob (solar-uboot-env: fw_setenv cannot create it from zero).
-IMAGE_BOOT_FILES:append = " uboot.env"
+# kernel is OTA-able without touching FAT. The pre-seeded env blob is no
+# longer an IMAGE_BOOT_FILES entry (2026-10-05): solar-uboot-env deploys
+# uboot-env-redundant.bin straight into the hidden wks area via wic
+# rawcopy, so nothing env-related lands on p1 at all.
 DEPENDS += " solar-uboot-env"
+
+# Belt for the wks template: do_write_wks_template expands the constants
+# via getVar of the raw body; make sure they are pinned in its hash.
+do_write_wks_template[vardeps] += "SOLAR_BOOT_ALIGN_KB SOLAR_BOOT_SIZE_MB SOLAR_UBOOT_ENV_OFFSET_KB SOLAR_UBOOT_ENV_BLOB"
 
 # Standalone squashfs artifact = the rootfs payload of the .swu (stable
 # symlink ...rootfs.squashfs-xz, referenced by solar-ctl-swu.bb). Same
@@ -122,32 +135,44 @@ OVERLAYFS_ETC_CREATE_MOUNT_DIRS = "0"
 # kernel (solar-ctl-slim.cfg) because there is no initramfs to load it
 # before mounting root, so the kernel-module-squashfs package no longer
 # exists at all.
-# u-boot-env ships /etc/fw_env.config (-> /boot/uboot.env); libubootenv-bin
+# u-boot-env ships /etc/fw_env.config - rewritten by u-boot_%.bbappend to
+# point at the RAW redundant env area (no /boot involvement); libubootenv-bin
 # is the wrynose fw_printenv/fw_setenv, so a manual bench slot switch is
-#   mount -o remount,rw /boot; fw_setenv slot b; mount -o remount,ro /boot
-# (swupdate's U-Boot backend writes the SAME env via libubootenv0, and
-# solar-update holds /boot rw around the install for exactly that).
+# just
+#   fw_setenv slot b
+# on the raw block device (2026-10-05: the remount-rw /boot dance is gone;
+# swupdate's U-Boot backend writes the SAME pair via libubootenv0).
 IMAGE_INSTALL:append = " \
     kernel-module-overlay \
     u-boot-env \
     libubootenv-bin \
 "
 
-# --- SWUpdate OTA agent ------------------------------------------------------
-# swupdate: on-demand CLI only. The recipe ships swupdate.service/.socket
-# that ENABLE THEMSELVES by installation (CONFIG_SYSTEMD=y) - a daemon
-# listening on IPC/USB contradicts the on-demand flow and wastes RAM, so
-# the units (and their wants-symlinks) are deleted in postprocess below.
-# swupdate-progress: the one daemon we do run (unit ships with
-# solar-swu-agent): receive-only watcher of the progress socket - logs
-# every update to journald and reboots via systemd on SUCCESS.
+# --- SWUpdate OTA agents -----------------------------------------------------
+# swupdate: signed-images build; since 2026-10-06 it runs as a DAEMON via
+# OUR solar-swupdate.service (HTTP :8080 install server; the inactive set is
+# derived at service start and pinned with -e/-q, signature with -k; doc
+# swupdate-ota.md §6.7). The upstream swupdate.service/.socket are STILL
+# deleted in postprocess below: they cannot know the per-boot slot selection,
+# and socket-activation of an install daemon is not what we want.
+# swupdate-progress: the progress watcher (unit ships with solar-swu-agent):
+# receive-only listener on the progress socket - logs every update to
+# journald and reboots via systemd on SUCCESS (CLI AND server installs).
+# swupdate-client: swclient for CLI pushes (incl. localhost bench tests).
 # solar-swu-agent: /etc/solar/swupdate.pub.pem, /etc/hwrevision,
-# /usr/bin/solar-update, first-boot kernel seed service.
+# /usr/bin/solar-update (CLI path), the server wrapper + unit + web root,
+# first-boot kernel seed service.
+# nftables + solar-firewall: default-deny INPUT with only 22 (dropbear) and
+# 8080 (swupdate server) reachable; kernel NF_TABLES is built-in
+# (solar-ctl-slim.cfg), no kernel-module-* packages.
 # e2fsck/mkfs.ext4: the /data self-heal in the overlayfs-etc preinit.
 IMAGE_INSTALL:append = " \
     swupdate \
     swupdate-progress \
+    swupdate-client \
     solar-swu-agent \
+    nftables \
+    solar-firewall \
     e2fsprogs-e2fsck \
     e2fsprogs-mke2fs \
 "
@@ -187,6 +212,15 @@ solar_ab_strip_swupdate_units() {
     rm -f ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/swupdate.service \
           ${IMAGE_ROOTFS}/etc/systemd/system/sockets.target.wants/swupdate.socket \
           ${IMAGE_ROOTFS}/etc/systemd/system/sockets.target.wants/swupdate-*.socket
+}
+
+# bench 2026-10-06: systemd-networkd-wait-online hangs forever on this image
+# (TimeoutStartSec=infinity, and networkd manages NO link - DHCP is done by
+# busybox udhcpc). It is enabled by default and blocks multi-user.target
+# forever (anything ordered after it never starts). Unenable it.
+ROOTFS_POSTPROCESS_COMMAND:append = " solar_ab_drop_wait_online;"
+solar_ab_drop_wait_online() {
+    rm -f ${IMAGE_ROOTFS}/etc/systemd/system/network-online.target.wants/systemd-networkd-wait-online.service
 }
 
 COMPATIBLE_MACHINE = "^raspberrypi"

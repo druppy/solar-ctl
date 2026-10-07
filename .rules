@@ -67,6 +67,18 @@
   the real home PSK, into CI artifacts/releases. CI has a guard step that
   fails the build if any of these secret-bearing files ever get tracked by
   git (firmware.yml "Guard against committed secret files").
+- `SOLAR_TZ` (kas `env:`, declared 2026-10-05) is the watch timezone:
+  the `inv-ctl` recipe writes `TZ=<value>` to `/etc/default/inv-ctl`,
+  which `inv-ctl.service` reads via `EnvironmentFile=-` (same
+  `/etc/default` convention as dropbear). Unset = no file = UTC fallback
+  (all CI builds). **musl has no zoneinfo** — value must be a POSIX TZ
+  string (`CET-1CEST,M3.5.0,M10.5.0/3` = Copenhagen); a zoneinfo name is
+  silently ignored by musl (= still UTC), so do_install bb-fatals on
+  `:*` (glibc file form), digit-less `*/*` (names never contain the
+  offset digits that every POSIX spec has), and `Etc/*` (the digit-
+  carrying name exception). `create_now_local()` honours TZ via
+  localtime_r — zero app code changed. Not a secret; safe in CI env.
+  `/etc/default/inv-ctl` is squashfs-baked: changing TZ = rebuild+OTA.
 - `SOLAR_SSH_PUBLIC_KEY` (kas `env:`, declared 2026-10-02) is baked into
   `/root/.ssh/authorized_keys` by `solar-rootkeys` (python do_install;
   one public key per line, real or literal `\n` separated, OR an ABSOLUTE
@@ -93,6 +105,14 @@
   `${UNPACKDIR}/<file>` paths for `file://` SRC_URI files.
 - A line whose first char is `}` inside a recipe shell/python function breaks
   bitbake's parser (e.g. a `network={...}` heredoc). Use template files + sed.
+- **Bare `$VAR` in a shell recipe function is NOT expanded by bitbake and
+  NOT exported to the task env** — it silently reads empty. Only the
+  braced `${VAR}` form triggers bitbake's textual expansion + dependency
+  tracking (hit 2026-10-05: SOLAR_TZ was present in the datastore per
+  `bitbake -e`, yet `[ -n "$SOLAR_TZ" ]` was false and the
+  /etc/default/inv-ctl bake skipped without a word; `${SOLAR_TZ}` fixed
+  it). Python functions differ: there `d.getVar("VAR")` is the mechanism
+  (and needs vardeps, see solar-rootkeys).
 - **A dangling `.bbappend` is a hard ERROR on wrynose, not a warning**: any
   `*.bbappend` in an *active* layer must match a recipe that is also visible.
   Adding `swupdate_%.bbappend` to `fw/` killed the image build (PR #1) with
@@ -173,7 +193,45 @@
   bounds", probe -EINVAL. The back-porches double as the GRAM x/y offset
   of the visible window: this TZT module needs `hback-porch = <14>`
   (GRAM kx=14, else a stale-pixel column band; ky=0 — ruler pattern
-  flush both ends). The controller init sequence is a **firmware file**
+  flush both ends). A speckled white line on one long edge of this TZT
+  module is **not** software — full exoneration bench 2026-10-05:
+  fb edge columns uniformly dark; widening the DT window (13/144, then
+  11/148) no effect; stripes painted into fb cols outside the window
+  invisible on glass (displayed set == calibrated window); SPI 2 MHz vs
+  16 MHz no effect; external clean 3V3 no effect (not the Pi rail);
+  MADCTL MX flip (live-patched bin via bind-mount + spi rebind) leaves
+  leaves it glued to the same physical edge; SOUCTRL column windows E0h-F2h
+  (§6.6.1, per-column precharge/discharge ranges) widened to chip reset
+  defaults no effect; **three separate modules show it identically**; and the
+  vendor-published NV3007A SPI init for this exact glass
+  (`fw/docs/nv3007a-ivo-spi-init.txt`, OSPtek repo
+  `osptek/tft-2.79-142x428-spi-nv3007`, CC BY 4.0) diffs **byte-for-byte
+  identical to our 120-command shipped blob** — the init sequence is exonerated
+  by identity, not by inference (only delta: a Delay(200) after DISPON).
+  Verdict: source-driver/COF bonding artifact of the TZT product line —
+  mitigate by bezel or another module family, do not re-litigate in
+  software. On-device `fbdump` (repo-root `fbdump/`, recipe `solar-fbdump`,
+  in the image) is the screenshot tool: /dev/fb0 → PNG to file or stdout
+  (`ssh board fbdump > shot.png`; `-b` for base64 when bytes must cross an
+  interactive pty — raw binary through one is silently mangled). Zero deps
+  (hand-rolled PNG + zlib stored blocks); device defaults baked via CMake
+  `FBDUMP_*` (fb dev, fallback geometry), CLI `-d/-g/-o` overrides.
+  `fw/tools/fb-dump.sh` wraps it host-side (thin ssh wrapper; errors
+  cleanly on images predating the tool). Unit tests (added 2026-10-06):
+  platform Catch2 (`find_package(Catch2 3 REQUIRED)` +
+  `Catch2::Catch2WithMain`, CI apt `catch2` on noble — the single
+  package carries headers + CMake config + static libs; there is no
+  `libcatch2-dev` in Ubuntu) — never FetchContent
+  (user policy 2026-10-07: LVGL is the only thing CMake may fetch),
+  `FBDUMP_BUILD_TESTS` default OFF (Yocto never sees Catch2), CI `fbdump`
+  job in firmware.yml.
+  `tests/test_png.cpp` #includes `src/main.cpp` (`FBDUMP_TESTS_BUILD` compiles
+  its `main()` out) — vectors for crc32/adler32/base64/RFC + 76-col wrap +
+  565-rescale, and `tests/golden_4x4.png` (byte-exact anchor generated by the
+  tool itself from `gradient_4x4.raw`; a second test validates the golden
+  independently so the anchor itself cannot rot). Catch2 gotcha: `CHECK(a == b
+  && c == d)` is a COMPILE error (chained-comparison guard) — split or parens.
+  The controller init sequence is a **firmware file**
   `/lib/firmware/panel-mipi-dbi-spi.bin` (= compatible[0] + ".bin";
   request_firmware, retried ~every 60s) — shipped by `solar-panel-fw`
   and bench-verified lighting the glass 2026-10-02; never fabricate
@@ -208,11 +266,15 @@
   layer and the parallel CI `swupdate` job are deleted. The bbappend + kconfig
   fragment now live in `fw/recipes-support/swupdate/` and are only legal there
   because `fw/kas-rpi0.yml` adds the meta-swupdate repo (dangling-bbappend
-  gotcha). swupdate IS in `IMAGE_INSTALL` (on-demand CLI; its auto-enabled
-  `.service`/`.socket` are deleted by an image postprocess fn).
+  gotcha). swupdate IS in `IMAGE_INSTALL`; its auto-enabled
+  `.service`/`.socket` are still deleted by the image postprocess fn —
+  since 2026-10-06 OUR `solar-swupdate.service` (solar-swu-agent) runs the
+  HTTP :8080 install server instead (see the next bullet; upstream units
+  cannot derive the per-boot set from root=).
   Merged-kconfig asserts (SIGNED_IMAGES/SIGALG_RAWRSA/HASH_VERIFY=y and —
   since the 2026-09-28 bootloader flip below — UBOOT/BOOTLOADER_DEFAULT_UBOOT/
-  DOWNLOAD/DOWNLOAD_SSL=y; MTD/WEBSERVER/LUA/SCRIPTS/SURICATTA not =y) moved
+  DOWNLOAD/DOWNLOAD_SSL=y, plus WEBSERVER/MONGOOSE=y since 2026-10-06;
+  MTD/LUA/SCRIPTS/SURICATTA/MONGOOSEIPV6/MONGOOSESSL not =y) moved
   into the main firmware CI job, reading the `${T}/swupdate-merged-dotconfig`
   snapshot the bbappend still writes (`rm_work` never deletes `temp`).
   **Warm-cache trap (hit 2026-10-02, runs 36853440890/37002108982):** when
@@ -262,15 +324,20 @@
   alt = p3 + slot-b }`, chosen at install: `swupdate -i f.swu -e
   stable,main|alt -k /etc/solar/swupdate.pub.pem`. `/usr/bin/solar-update`
   (recipe `solar-swu-agent`) ONLY derives the set from `root=` in
-  /proc/cmdline, mkdirs `/data/cores/slot-{a,b}`, holds /boot rw (trap
-  remounts ro on EXIT) and forwards args to swupdate — both `-i f.swu` and
+  /proc/cmdline, mkdirs `/data/cores/slot-{a,b}` and forwards args to
+  swupdate — both `-i f.swu` and
   `-d "-u https://..."` work (CONFIG_DOWNLOAD+DOWNLOAD_SSL now on; curl+TLS
-  in the image, nothing listens); `-n|--no-reboot` only plants the one-shot
+  in the image); since 2026-10-06 OUR `solar-swupdate.service` (solar-swu-agent)
+  runs the HTTP :8080 install server instead of upstream's units, which stay
+  deleted (they cannot derive the per-boot set from root=); `-n|--no-reboot`
+  only plants the one-shot
   `/run/solar-update/no-reboot`. The reboot is done by **our
   solar-swupdate-progress.service** (same recipe, `swupdate-progress` now in
   the image): watches the progress socket, logs to journald, on SUCCESS runs
   `/usr/libexec/solar-swu-reboot` (consumes the marker and stays up, else
-  `exec systemctl reboot` — never raw reboot(2)). Verified in 2026.05.1:
+  `exec systemctl reboot` — never raw reboot(2)). Since 2026-10-06 the same
+  contract covers SERVER installs (HTTP upload, see next bullet). Verified in
+  2026.05.1:
   **swupdate itself never reboots** — sw-description `reboot = true` only
   feeds progress/suricatta notifications; the progress server starts on EVERY
   run (core/swupdate.c:1116 — watcher fires for CLI -i/-d too); `-w` blocks
@@ -313,6 +380,72 @@
   a few KB. Recovery after the bug bit: `bitbake solar-ctl-swu -c cleansstate`
   (the promoted setscene unpack stamp must die before unpack re-runs).
   **Artifact name has a `.rootfs` infix**: `solar-ctl-swu-raspberrypi0-wifi.rootfs.swu`.
+- **HTTP install server + firewall (2026-10-06, doc swupdate-ota.md §6.8)**:
+  `solar-swupdate.service` (solar-swu-agent, Type=notify) runs
+  `/usr/libexec/solar-swupdate-server`, which derives the INACTIVE set from
+  `root=` at service start and `exec swupdate -e stable,<set> -q stable,<set>
+  -k /etc/solar/swupdate.pub.pem -w "-p 8080 -t 30 -r /usr/share/solar-swu-web"`
+  (all verified against 2026.05.1 `9000ecb5`): uploads via `/upload` carry no
+  set, so the daemon's `-e` applies (`core/stream_interface.c` overwrites only
+  when the request brings one); `-q` (`accepted-select` dict, `is_selection_allowed`
+  in `core/network_thread.c`) rejects any client-proposed set not on the list
+  → a client can never target the RUNNING partition; HW-compat and signature
+  run inside the stream parse regardless of transport (`check_hw_compatibility`
+  at `stream_interface.c:231`; a SIGNED_IMAGES build refuses to start without
+  `-k`). No size cap exists in the webserver (only `-t 30` idle watchdog); the
+  signature is the trust gate, open 8080 merely allows useless pushes. Reboot
+  on SUCCESS reuses the existing progress-socket contract (the daemon never
+  reboots itself; `swupdate -w` keeps foreground and sd_notify READY=1 →
+  Type=notify). Mongoose is the only WEBSERVER impl (kconfig `WEBSERVER=y` +
+  `MONGOOSE=y`); **`MONGOOSEIPV6`/`MONGOOSESSL` are hard-off**: kernel
+  `CONFIG_IPV6 is not set` (2026-10-06 user decision: nothing here speaks v6),
+  so v6 listeners would be dead weight, and web TLS is pointless when the
+  artifact is signed — no cert plumbing. Mongoose is vendored → zero new
+  DEPENDS. Web root ships as our own `/usr/share/solar-swu-web/` = our
+  `index.html` (upload form + WS progress) + `swupdate_background.png`
+  ("blue eyes Tux", 236 KB PNG, referenced by relative URL so mongoose
+  serves it from the docroot — no server plumbing); `swupdate-www` is NOT
+  installed. `swupdate-client` (swclient) IS. **Firewall**: `solar-firewall`
+  recipe (fw/recipes-support/solar-firewall) = `/etc/nftables/solar.nft` +
+  oneshot unit Before=network-pre.target (atomic `nft -f`, starts with `flush
+  ruleset`); policy-drop `table ip` (**not `inet`** — NF_TABLES_INET depends
+  on the dead IPV6), allowing lo/established/related/DHCP-replies/icmp-echo/
+  tcp22/tcp8080. **DHCP replies need their own `udp sport 67` accepts (dport
+  67 and 68) placed BEFORE `ct state invalid drop`** (bench 2026-10-06: after a
+  reboot conntrack is empty, the client probes 0.0.0.0:68→255.255.255.255:67
+  and the server's unicast reply to the not-yet-owned yiaddr matches no
+  tracked flow — `established,related` never fires, policy drop wins, board
+  boots perfectly but silently never gets a lease = "no route to host" until
+  the cable-plug detective finds it in the ruleset).
+  Kernel symbols `NF_TABLES/NF_TABLES_IPV4/NF_CONNTRACK/NFT_CT` are **=y** in
+  `solar-ctl-slim.cfg` (no module packages, no load races; `nft_meta` is
+  core-built-in in 6.18, TCP/UDP conntrack unconditional under NF_CONNTRACK —
+  the old `NF_CT_PROTO_*` options are gone). Userspace `nftables` comes from
+  **meta-networking** (now a kas layer; it hard-depends on `meta-python`,
+  also added — LAYERDEPENDS error at first parse was the tell; both layers
+  live in the already-locked meta-openembedded repo → lockfile unchanged, and
+  `kas lock` said "No floating repos" when re-run). Distro conf pins
+  `PACKAGECONFIG:pn-nftables = "mini-gmp"` (no python/json/readline/gmp
+  runtime; python3-native is inherited by the recipe regardless). `ipv6`
+  stays in DISTRO_FEATURES_DEFAULTS on purpose: dropping it would churn the
+  basehash of nearly the whole world; the kernel kill is the real gate.
+  CI swupdate-kconfig asserts flipped: WEBSERVER/MONGOOSE =y, MONGOOSEIPV6/
+  MONGOOSESSL in the not-set list. **Bench round 2 (A→B→A over HTTP,
+  image-native)**: the unit must order `After=network.target`, NEVER
+  `network-online.target` — `systemd-networkd-wait-online` hangs
+  **forever** on this image (TimeoutStartSec=infinity, networkd manages
+  **no** link, DHCP is busybox `udhcpc`) and held `multi-user.target`
+  hostage; image unenables it (`solar_ab_drop_wait_online` postprocess,
+  solar-ctl-image.bb). `swupdate-client x.swu` flag-less works (daemon
+  `-e` applies; status stream + SUCCESS + progress-hook reboot; rc 0) —
+  `swupdate_async_start returns -1` is the `-q` REJECTION verdict, not a
+  transport error. Mongoose upload takes **any** multipart file-part name
+  (`mongoose_interface.c` streams `mp->part.filename`); optional form
+  field `set=stable,X` is the client proposal `-q` denies. Live-debug
+  edits under /etc sit in the **shared overlay upper** and survive slot
+  switches — delete them before calling a deploy image-native (the final
+  B→A deploy booted clean: slot a, zero pending jobs, server active,
+  no drop-ins).
 - **sw-description gotchas** (verified by building it): libconfig comments
   must be `/* */`; the `$fn(...)`/`@@VAR@@` expansion regex scans **every
   line including comments** — mentioning `$swupdate_get_sha256(...)` in a
@@ -337,10 +470,55 @@
   (`u-boot-configure.inc` merges every SRC_URI `*.cfg`). **NO dtb in the
   .swu**: boot uses the p1 DTB+overlays loaded by start.elf (never OTA'd) →
   kernels shipped by OTA must stay compatible with the installed dtb.
-- **`uboot.env` must be shipped, libubootenv cannot create it** (bench
-  2026-09-25). `fw/recipes-bsp/u-boot/solar-uboot-env_0.1.bb` deploys a
-  16384-byte blob = 4-byte LE CRC32 + **full u-boot default env + `slot=a\0`**
-  + NUL pad (zlib.crc32 over the remaining bytes). **slot-only blobs are a
+- **U-Boot env = raw redundant pair in a hidden SD area, NOT the p1 FAT
+  file** (user decision + impl 2026-10-05: every slot switch used to mutate
+  FAT metadata — the one structure we promised p1 to be free of; msdos has
+  no 5th primary slot, so the 32 KiB region is a wic `--no-table --offset`
+  partition, `rawcopy` from DEPLOY_DIR_IMAGE; p2/p3/p4 keep their indexes,
+  slot-a lands at 108 MiB (p1 = 4..104 exactly). **The wks p1 must be
+  `--fixed-size`, never plain `--size`** (hit 2026-10-05: wic's default
+  `overhead_factor=1.3` multiplies non-fixed parts during content sizing —
+  `--size 100` silently became 130 MiB, walked over the hidden area's
+  `--offset`, and do_image_wic died with "Could not place mmcblk02 at
+  offset 109051904"; the bench-validated 2026-09 images actually had
+  slot-a at 136 MiB, unnoticed because every consumer addresses slots by
+  index). All geometry
+  constants live in `fw/classes/solar-ablayout.bbclass` (boot size → env
+  offset derivation, shared by wks.in template, u-boot fragment, fw_env.
+  config, blob recipe). U-Boot: `# CONFIG_ENV_IS_IN_FAT is not set` +
+  `ENV_IS_IN_MMC` + `ENV_REDUNDANT` + both `CONFIG_ENV_OFFSET(_REDUND)`
+  hex symbols are ALL generated from the class constants at configure time
+  — `do_configure:prepend` writes `${B}/solar-env-redundant.cfg` (SRC_URI
+  cfg files are verbatim, bitbake never expands file contents),
+  `do_configure:append` post-merges it (`merge_config.sh -m -O`) +
+  **`olddefconfig`** + greps that bbfatal on silently-dropped symbols.
+  **Never enable the MMC env backend in a SRC_URI `*.cfg` and never use
+  `oldconfig` here** (hit 2026-10-05: `u-boot-configure.inc` runs
+  `cml1_do_configure = yes '' | oe_runmake oldconfig` over SRC_URI cfgs
+  BEFORE any bbappend `:append` body; `ENV_IS_IN_MMC` without values makes
+  the defaultless hex `ENV_OFFSET` prompt, empty `yes` answers re-prompt
+  forever — an infinite loop that wrote a 60 GB log.do_configure before
+  exit 137; olddefconfig is promptless and cannot hang). Byte layout
+  VERIFIED against both
+  sides of the wire: per copy `[crc32 LE over DATA ONLY][flags u8][data
+  ENV_SIZE-5]` (u-boot env_internal.h ENV_HEADER_SIZE=4+1, libubootenv
+  uboot_env_redund — identical); higher flags wins, seed = copy0 flag0 +
+  copy1 flag1 so first saveenv heals copy0. Blob bytes + merged `.config`
+  asserts PASSED in build 2026-10-05 (`ENV_OFFSET=0x6800000`,
+  `ENV_OFFSET_REDUND=0x6804000`, `# CONFIG_ENV_MMC_USE_DT is not set`,
+  FAT sub-symbols gone, 32768-B blob CRCs/flags verified). `/etc/fw_env.config` (legacy
+  2-line redundant form) is rewritten by a **`do_install[postfuncs]`**
+  python in the u-boot bbappend: postfuncs run after ALL do_install bodies
+  including other layers' `:append` — a second `do_install:append` would
+  LOSE to meta-raspberrypi's (its prio 9 parses after our 6, FILESEXTRAPATHS
+  first-match likewise favors them); ownership stays in ${PN}-env. libubootenv
+  docs confirm: 2 entries = redundant pair; file paths AND raw block devices
+  both legal; negative offsets = from end of device.
+- **The env blob must be shipped, pre-built, complete** (bench
+  2026-09-25). `fw/recipes-bsp/u-boot/solar-uboot-env_0.1.bb` deploys
+  `uboot-env-redundant.bin` = 2 × 16384 bytes, each 4-byte LE CRC32 +
+  flags + **full u-boot default env + `slot=a\0`** + NUL pad
+  (zlib.crc32 over the data bytes only). **slot-only blobs are a
   trap** (hit 2026-09-28 first bench boot of the factory image): U-Boot treats
   a valid-CRC env as COMPLETE, so bootcmd/bootdelay vanish — autoboot and even
   `boot` become silent no-ops; recovery is `env default -a` + `env save` from
@@ -348,16 +526,42 @@
   `u-boot-initial-env-<machine>-<pv>` (u-boot.inc deploys it as KEY=VALUE
   text; `do_deploy[depends] += "virtual/bootloader:do_deploy"` is ORDERING
   only — bitbake can't hash that file, so touch the recipe after a u-boot
-  bump). libubootenv acceptance of the blob format VERIFIED on bench
-  2026-09-28 (`fw_printenv slot` → `slot=a`). Needs `inherit deploy` (that
+  bump; `do_deploy[vardeps]` pins the class-read SOLAR_UBOOT_* vars — the
+  by-name getVar stale-task trap again). libubootenv acceptance of the blob
+  format VERIFIED on bench 2026-09-28 (`fw_printenv slot` → `slot=a`, old
+  single-copy format). Needs `inherit deploy` (that
   class owns DEPLOYDIR; setting `do_deploy[dirs]="${DEPLOYDIR}"` by hand trips
-  the WORKDIR-pollution guard). Lands on p1 via `IMAGE_BOOT_FILES:append = "
-  uboot.env"` + `DEPENDS += solar-uboot-env`.
+  the WORKDIR-pollution guard). Lands on the card via the wks hidden rawcopy
+  part (was `IMAGE_BOOT_FILES` `uboot.env` until 2026-10-05) + `DEPENDS +=
+  solar-uboot-env`. **Bench VERIFIED 2026-10-05** (raw redundant pair, fresh
+  image): `fw_printenv slot` → a from the hidden area; manual `fw_setenv
+  slot b` + reboot → `root=/dev/mmcblk0p3` with ZERO p1 writes (FAT fallback
+  uImage loaded — slot-b had no kernel yet, which also validated that
+  path); two full URL OTAs (`solar-update -d "-u http://…"`) B→A and A→B —
+  slot-a and slot-b both later booted via ext4load of
+  /data/cores/slot-*/uImage; final manual b→a flip back to p2. bootenv
+  write via the U-Boot backend + libubootenv into the raw area = live.
+  **Power-cut-mid-`fw_setenv` DONE 2026-10-06** (`fw/tools/env-powercut.sh`
+  — dump/arm/done/torn/corrupt/verdict; results tsv gitignored; all
+  PASS): a real physical cut (arm mode, plug pulled in the raised
+  dirty-writeback window) LEFT THE NEW VALUE FULLY LANDED — libubootenv
+  fsyncs internally before `fw_setenv` returns. A synthesized torn
+  promotion (promote standby with flags max+1 + fresh CRC, flush only 19
+  of 32 sectors): the highest-flags-but-CRC-INVALID copy is rejected, the
+  board boots the untouched last-good copy with one consistent value.
+  Active-copy CRC kill: boots the survivor, and the NEXT `fw_setenv`
+  rewrites the dead copy byte-exactly (both CRCs identical again —
+  self-heal verified). Fixture trap found while building `torn`: the CRC
+  covers DATA ONLY and our generations differ only in the `slot` byte, so
+  a slot-flip-promoted blob is byte-identical to the old standby copy —
+  a partial flush of it is trivially a COMPLETE write (false PASS on the
+  first run); one byte stamped in the NUL padding beyond the flush window
+  makes the tail genuinely stale.
 - **Nothing mounts `/boot` automatically** (bench 2026-09-28): the wrynose
   direct imager writes NO fstab line for the wks `/boot` mountpoint (stock OE
-  fstab ships) — a fresh boot has p1 unmounted, so `fw_printenv` dies with
-  "Cannot initialize environment" and `solar-update`'s
-  `mount -o remount,rw /boot` aborts (`set -e`). Fix = `boot.mount` unit in
+  fstab ships). Since 2026-10-05 the ONLY consumer is `solar-cores-seed`'
+  first-boot copy of /boot/uImage (env/slot switches moved to the raw area —
+  `fw_setenv` needs no mount now). Fix = `boot.mount` unit in
   solar-swu-agent (`What=/dev/disk/by-label/boot`, vfat, `ro`; enabled via
   `SYSTEMD_SERVICE`). A recipe must NOT `install -d ${D}/boot` (installed-vs-shipped
   QA; the dir already exists in the base rootfs). Overlay trap while
@@ -582,6 +786,23 @@
   self-overlays `/var/{cache,lib,spool}` on tmpfs — works on a RO root, no
   `overlayfs.bbclass` needed.
 
+## C++ style (user preference, 2026-10-06)
+- Every `.cpp` (NOT headers) puts `using namespace std;` after its include
+  block and uses bare names — no `std::` prefixes — except where an
+  unqualified name would genuinely collide. Validated: zero new warnings in
+  inv_ctl (glibmm/LVGL/SDL2) and fbdump; C-library names are safe because
+  the C++ headers pull the global names into std as the same entity.
+- Structs/lists are initialized as far as possible **at construction** —
+  `{}`/designated-init/value ctors, not "declare then assign fields one by
+  one" (2026-10-06 sweep: fbdump `Sink` got a real ctor, `Geo` from the
+  ioctls is one designated aggregate assignment; members that can't be
+  constexpr-filled keep NSDMI defaults).
+- Read-only strings are `string_view` (params and aliases, both projects,
+  2026-10-06). C boundaries that need null termination (wext ioctl, sysfs
+  paths, `access`, LVGL `set_file`) get ONE materialized copy at the
+  boundary (`char ifn[IFNAMSIZ]{}` / `const string fb{fbdev}`), never
+  `sv.data()`-into-C. `sv` has no `c_str()` — fprintf uses `%.*s`.
+
 ## inv_ctl app (added 2026-10-01, bench verified 2026-10-02)
 - Repo-root `inv_ctl/` is a standalone CMake project; Yocto recipe
   `fw/recipes-apps/inv-ctl/inv-ctl_0.1.bb` (filename = PN = `inv-ctl`, which
@@ -589,6 +810,21 @@
   SDL2 (native, FetchContent lvgl pinned to meta-oe's SRCREV) vs
   `lv_linux_fbdev_*` (target); `--backend sdl|fb`, `--fb DEVICE`; the fb
   backend retries forever until /dev/fb0 exists (panel probe + init-fw delay).
+- inv_ctl CMake dep policy (user directive 2026-10-07): **LVGL is the only
+  FetchContent** (embedded nature, byte-identical pin); every other dep must
+  exist on the platform or configure hard-fails. swupdate protocol headers:
+  `find_path(progress_ipc.h)` fed by `-DINV_CTL_SWUPDATE_INCLUDE=<src>/include`,
+  or `SWUPDATE_SRC=<src-root>` env hint (PATH_SUFFIXES include), or system
+  headers (laptop has apt `libswupdate-dev`; Yocto gets them via recipe
+  `DEPENDS` — sysroot hit, verified rc=0 2026-10-07); `INV_CTL_SYSTEM_SWUPDATE=ON`
+  additionally `find_library(swupdate REQUIRED)` (never absent in the sysroot,
+  that option is Yocto-only). Catch2: `find_package` only (unit tests bullet
+  below). Layout: everything that renders lives in **`src/ui/`** (`lvgl.hpp`
+  umbrella, backend, watch, status_panel, upgrade); `src/` keeps main/net/
+  board/update/updater; CMake puts `src/` on the include path and main.cpp
+  includes `ui/<x>.hpp`. Native builds go in `inv_ctl/build-ui/` (the
+  `inv_ctl/build*/` gitignore covers it) — `inv_ctl/native/` holds ONLY
+  `lv_conf.h`, never build artifacts (it was polluted until 2026-10-07).
 - SRC_URI plumbing for the repo-root app dir (validated 2026-10-01): in a
   `.bb`, `${LAYERDIR}` inside FILESEXTRAPATHS stays LITERAL (it is a
   layer.conf variable) and absolute `file://` SRC_URIs path-preserve under
@@ -659,16 +895,22 @@
   LEADING space before the iface name too; trimming only the
   pre-colon padding leaves " wlan0", strcmp never matches and the UI
   query_signal failure zeroing it). Trim BOTH ends.
-- inv_ctl unit tests (added 2026-10-02): CTest + Catch2 v3 (amalgamated,
-  `EXCLUDE_FROM_ALL`), harness gated by `INV_CTL_BUILD_TESTS` (default OFF
-  — the Yocto build never sees Catch2 or a FetchContent at do_configure) and
+- inv_ctl unit tests (added 2026-10-02): CTest + Catch2 v3 from the
+  platform (`find_package(Catch2 3 REQUIRED)`, link
+  `Catch2::Catch2WithMain`, includes `<catch2/catch_test_macros.hpp>`;
+  CI apt `catch2` (noble has no `libcatch2-dev` — apt failed loudly on
+  2026-10-07) — since 2026-10-07 NO FetchContent anywhere,
+  LVGL is the only fetched dep), harness gated by `INV_CTL_BUILD_TESTS`
+  (default OFF — the Yocto build never sees Catch2) and
   `INV_CTL_BUILD_UI=OFF` (skips glibmm/SDL2/LVGL entirely — net.cpp is libc
-  + syscalls). Run: `cmake -DINV_CTL_BUILD_UI=OFF -DINV_CTL_BUILD_TESTS=ON`
-  + `ctest --test-dir <dir>`. CI: parallel `unit-tests` job in firmware.yml
-  (no kas, no secrets). golden /proc/net/wireless inputs = bench captures;
-  golden inputs replay via tmpfile(). Catch2 comes from GitHub (v3.7.1,
-  EXCLUDE_FROM_ALL needs CMake>=3.28 — runner-pinned ubuntu-24.04 provides
-  cmake 3.28; the Yocto build never configures the test branch).
+  + syscalls). Run: `cmake -DINV_CTL_BUILD_UI=OFF -DINV_CTL_BUILD_TESTS=ON
+  -DINV_CTL_SWUPDATE_INCLUDE=<swupdate-src>/include` + `ctest --test-dir
+  <dir>` (headers are a hard requirement, see the inv_ctl app bullet;
+  the laptop also has apt libswupdate-dev in /usr/include). CI: parallel
+  `inv-ctl` job in firmware.yml (no kas, no secrets; stages the pinned
+  swupdate SRCREV headers via curl+tar and hands CMake `-D...INCLUDE`).
+  golden /proc/net/wireless inputs = bench captures;
+  golden inputs replay via tmpfile().
   `parse_wext` is **regex-based by user preference** (readability,
   2026-10-02; the tests are its safety net): the `(?:\s|$)` tail is
   load-bearing — it rejects the "--"/"99/99"/"-67.." markers, and an
@@ -677,6 +919,55 @@
   **std::cmatch** — `smatch` is `string::const_iterator`-based and
   will not bind (GCC 16 spelled it out; the build failing silently
   left ctest replaying the stale binary as a false 10/10).
+- **The UI lives in logical LANDSCAPE 428x142** (bench-verified fbdump
+  calibration 2026-10-07): the fb backend applies `--rotate 90` (default), so
+  LVGL's layout space is 428 wide x 142 tall even though /dev/fb0 is 142x428
+  portrait. Layout constants MUST use landscape coords — a portrait-designed
+  upgrade page (arc TOP_MID y=60, label y=200) landed 34px-clipped and
+  label-off-screen; only caught on the bench. watch.cpp's idiom is canonical:
+  round gauge LEFT_MID, text block to its right. fbdump evidence is raw fb =
+  rotated content: `magick shot.png -rotate 90` (clockwise) = the user view.
+  Capture during OTA: loop fbdump ON the board into `/data/shots/` (survives
+  the install-reboot; /tmp does not); status page is visible only ~12-15 s.
+  Jitter check: label text-block bbox must be identical across consecutive
+  frames except right-edge growth; "Restarting" frames were byte-identical
+  md5 across two separate uploads.
+- **Progress percent is composed, never raw** (user-visible sawtooth fixed
+  2026-10-07): SWUpdate feeds TWO parallel axes per pinned sources —
+  `dwl_percent` = share of the archive streamed into the install pipe
+  (mongoose `write()`s each multipart chunk straight to the installer, the
+  upload IS streamed, no temp file), and `cur_percent` = percent of the
+  CURRENT image, reset to 0 by `swupdate_progress_inc_step` for every image
+  of the set (ours has 2: rootfs + uImage). Displaying one raw axis per
+  message made the arc rewind at every alternation; `overall_percent(msg,
+  prev)` (update.cpp, unit-tested) composes `max(dwl, (done_steps*100 +
+  cur)/nsteps)` and clamps monotonic (reset on START). `nsteps` is final at
+  sw-description parse (parser.c counts set images; no addstep caller in
+  2026.05.1), so `cur_step == nsteps` = "last image running", NOT done.
+  Status line shows a CALM phase word (`phase_name`: Starting/Receiving/
+  Installing + `cur_step/nsteps`) — rendering the raw alternating tokens
+  made the label flap several times a second (user: "stressful to watch",
+  fixed 2026-10-07); raw tokens go to the journal via the Updater's
+  log_msg. Label-line stability proof: crop the state text band from
+  rotated fbdump frames — md5-identical across the whole install. PITFALL for verifying
+  any UI change over OTA: the progress page is rendered by the ACTIVE slot's
+  inv-ctl, so the upload that carries a UI fix never shows it — capture
+  frames during the NEXT upload (costs one extra cycle).
+- inv_ctl board identity (added 2026-10-06): status panel shows
+  `/sys/firmware/devicetree/base/{model,serial-number}` (bench capture:
+  each file is ONE NUL-terminated string, no newline — parser also
+  tolerates `\n`); gate = model prefix "Raspberry Pi", so a laptop
+  (x86, no DT at all) gets an empty `BoardInfo` and the labels are
+  never created. Zero W serial prints old-format 16-hex
+  `0000000047ec1e46` — the leading zeros are real, don't trim.
+  `test_board.cpp` #includes `board.cpp`; its fixture writes NUL bytes
+  with explicit length (the net fixture's strlen would truncate).
+- LVGL 9.4 antialiasing has **no config knob**: `disp->antialiasing`
+  defaults to 1 for `LV_COLOR_DEPTH > 8` (lv_display.c), and
+  `lv_display_set_antialiasing()` warns "Disabling anti-aliasing is
+  not supported since v9". Text AA is baked into the 4 bpp Montserrat
+  glyph bitmaps. Both our builds are depth 32 → AA is on, nothing to
+  enable (verified against the pinned SRCREV source, 2026-10-06).
 - Bench serial quirks: the default console is the **mini-UART** — it eats
   chars on lines >~60; wake with `\r`, flush with `\025\003`, never type
   3.4 KB base64 lines (wget over LAN instead). CH341 dongle drops off

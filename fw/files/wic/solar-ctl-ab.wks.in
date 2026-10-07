@@ -1,0 +1,64 @@
+# solar-ctl A/B layout (doc swupdate-ota.md §5, §10 step 4).
+#
+# This is a wic TEMPLATE (.wks.in): image_types_wic expands the ${VARS}
+# below from the IMAGE recipe's datastore at build time. The geometry
+# constants live in classes/solar-ablayout.bbclass (inherited by
+# solar-ctl-image.bb) and are shared with the U-Boot env kconfig fragment
+# and /etc/fw_env.config - the layout moves as one unit or not at all.
+# Undefined ${VAR}s would be stripped silently by the expander, so every
+# name here must exist in the class.
+#
+#  p1 vfat    GPU firmware + u-boot.bin (deployed as kernel.img) + boot.scr
+#             + uImage (factory fallback only). Per-slot kernels
+#             live on ext4 /data/cores/slot-{a,b} since 2026-09-28, NOT on
+#             p1. The U-Boot env left p1 on 2026-10-05 (see the hidden part
+#             below): slot switches no longer write FAT metadata at all,
+#             and Linux never needs to mount p1 rw.
+#  hidden     raw redundant U-Boot env pair (uboot-env-redundant.bin from
+#             solar-uboot-env, copied by rawcopy out of DEPLOY_DIR_IMAGE),
+#             --no-table: written into the image at --offset but absent from
+#             the partition table (msdos primary slots are all taken by
+#             p1..p4; a table entry for 32 KiB would also tempt resize
+#             tools). Consequence: slot-a lands at 108 MiB (p1 = 4..104,
+#             env 32 KiB flush at 104, then --align 4096 rounding) -
+#             invisible: p2/p3/p4 keep their indexes and every consumer
+#             addresses them by index. (NB: pre-fixed-size images from
+#             2026-09 actually had p1 at 4..134 MiB and slot-a at 136 MiB -
+#             see the --fixed-size gotcha below - also harmless for the
+#             same index reason.) Never
+#             mounted, never in any fstab; Linux touches it only through
+#             fw_setenv/libubootenv. Copy0 @ offset, copy1 @ offset+16 KiB
+#             (offsets derived in the class; u-boot's ENV_OFFSET(_REDUND)
+#             and fw_env.config read the same two numbers).
+#  p2/p3      squashfs-xz root slots, FIXED size: the payload must fit or
+#             the wic build fails (there is no resize at flash time).
+#  p4 ext4    /data: mounted by the overlayfs-etc preinit, hosts the /etc
+#             overlay upper and app state. Deliberately given no mountpoint
+#             in the wks -> no fstab line, so systemd never owns the mount.
+#             NB: NO --source here - "--source empty" leaves the partition
+#             UNFORMATTED (all zeros); no source at all is what makes wic
+#             run mkfs.ext4 on it.
+#
+# --size/--fixed-size are in MiB, --offset/--align are in KiB. Slots:
+# ~350 MiB as in the design doc.
+# p4 is sized for the 122 GB bench card (any slack stays unpartitioned at
+# the end of the card; a smaller card fails the wic build with a clear
+# error - adjust --fixed-size if the card changes).
+#
+# TRAP (hit 2026-10-05, caught by the hidden env part colliding): p1 MUST
+# be --fixed-size, never plain --size. wic's default overhead_factor=1.3 is
+# applied to every non-fixed part during content sizing: a --size 100 p1
+# silently becomes 130 MiB (get_rootfs_size: content padded to the request,
+# then x1.3), which walked over the --offset of the hidden env area and
+# killed do_image_wic with "Could not place mmcblk02 at offset 109051904".
+# --fixed-size bypasses the overhead math entirely (and overflows fail
+# loudly), so the p1 geometry the class derives stays what the card gets.
+# Boot content is ~20 MiB; 100 fixed has ample headroom.
+
+part /boot --source bootimg-partition --ondisk mmcblk0 --fstype=vfat --label boot --active --align ${SOLAR_BOOT_ALIGN_KB} --fixed-size ${SOLAR_BOOT_SIZE_MB} --fsoptions "defaults,ro"
+part --source rawcopy --sourceparams "file=${SOLAR_UBOOT_ENV_BLOB}" --ondisk mmcblk0 --no-table --offset ${SOLAR_UBOOT_ENV_OFFSET_KB}
+# (squashfs has no label concept - wic refuses --label here; the slots are
+#  addressed as /dev/mmcblk0p{2,3}, per doc §4's device-node root= decision)
+part slot-a --source rootfs --ondisk mmcblk0 --fstype=squashfs --align 4096 --fixed-size 350 --mkfs-extraopts "-comp xz"
+part slot-b --source rootfs --ondisk mmcblk0 --fstype=squashfs --align 4096 --fixed-size 350 --mkfs-extraopts "-comp xz"
+part none --ondisk mmcblk0 --fstype=ext4 --label data --align 4096 --fixed-size 119000

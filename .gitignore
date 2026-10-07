@@ -4,7 +4,11 @@
 build/
 # inv_ctl native/test build dirs (kas uses the root build/ only)
 inv_ctl/build*/
+# fbdump native build dir
+fbdump/build*/
 kas-build.log
+# mutable bench log from fw/tools/env-powercut.sh (findings go into the docs)
+fw/tools/powercut-results.tsv
 layers/
 # throwaway CI/local wifi fragment (kas wifi override from secrets)
 .kas-wifi-ci.yml

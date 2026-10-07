@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -14,9 +15,11 @@
 
 #include <linux/wireless.h>
 
+using namespace std;
+
 namespace {
 
-std::string query_ssid(const char * ifname)
+string query_ssid(const char * ifname)
 {
     const int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (fd < 0)
@@ -24,11 +27,11 @@ std::string query_ssid(const char * ifname)
 
     char buf[IW_ESSID_MAX_SIZE + 1] = {};
     struct iwreq wrq = {};
-    std::strncpy(wrq.ifr_name, ifname, IFNAMSIZ);
+    strncpy(wrq.ifr_name, ifname, IFNAMSIZ);
     wrq.u.essid.pointer = buf;
     wrq.u.essid.length = sizeof(buf);
 
-    std::string ssid = "--";
+    string ssid = "--";
     if (ioctl(fd, SIOCGIWESSID, &wrq) == 0 && buf[0] != '\0')
         ssid = buf;
 
@@ -62,16 +65,16 @@ bool parse_wext(FILE * f, const char * ifname, int & dbm)
      * whitespace or end-of-line. Status is never inspected: mac80211
      * drivers leave it at 0000 even when associated (query_carrier() is
      * the link indicator). */
-    static const std::regex line_re(
+    static const regex line_re(
         R"(^\s*([^:\s]+)\s*:\s*\S+\s+\S+\s+(-?[0-9]+\.?)(?:\s|$))");
 
     bool found = false;
-    char line[256];
-    while (std::fgets(line, sizeof(line), f)) {
-        std::cmatch m; // cmatch, not smatch: raw char* line, not std::string
-        if (!std::regex_search(line, m, line_re) || m[1].str() != ifname)
+    char line[256] = {};
+    while (fgets(line, sizeof(line), f)) {
+        cmatch m; // cmatch, not smatch: raw char* line, not string
+        if (!regex_search(line, m, line_re) || m[1].str() != ifname)
             continue; // header row, other iface, or level not a plain number
-        dbm = static_cast<int>(std::strtol(m[2].str().c_str(), nullptr, 10));
+        dbm = static_cast<int>(strtol(m[2].str().c_str(), nullptr, 10));
         found = true;
     }
     return found;
@@ -79,11 +82,11 @@ bool parse_wext(FILE * f, const char * ifname, int & dbm)
 
 bool query_signal(const char * ifname, int & dbm)
 {
-    FILE * f = std::fopen("/proc/net/wireless", "re");
+    FILE * f = fopen("/proc/net/wireless", "re");
     if (!f)
         return false;
     const bool found = parse_wext(f, ifname, dbm);
-    std::fclose(f);
+    fclose(f);
     return found;
 }
 
@@ -93,7 +96,7 @@ bool query_signal(const char * ifname, int & dbm)
 bool parse_carrier(FILE * f)
 {
     int carrier = 0;
-    if (std::fscanf(f, "%d", &carrier) != 1)
+    if (fscanf(f, "%d", &carrier) != 1)
         carrier = 0;
     return carrier == 1;
 }
@@ -101,25 +104,25 @@ bool parse_carrier(FILE * f)
 bool query_carrier(const char * ifname)
 {
     char path[128];
-    std::snprintf(path, sizeof(path), "/sys/class/net/%s/carrier", ifname);
-    FILE * f = std::fopen(path, "re");
+    snprintf(path, sizeof(path), "/sys/class/net/%s/carrier", ifname);
+    FILE * f = fopen(path, "re");
     if (!f)
         return false;
     const bool linked = parse_carrier(f);
-    std::fclose(f);
+    fclose(f);
     return linked;
 }
 
-std::string query_ipv4(const char * ifname)
+string query_ipv4(const char * ifname)
 {
     struct ifaddrs * addrs = nullptr;
     if (getifaddrs(&addrs) != 0)
         return "--";
 
-    std::string ip = "--";
+    string ip = "--";
     for (const struct ifaddrs * a = addrs; a; a = a->ifa_next) {
         if (!a->ifa_addr || a->ifa_addr->sa_family != AF_INET ||
-            std::strcmp(a->ifa_name, ifname) != 0)
+            strcmp(a->ifa_name, ifname) != 0)
             continue;
         char buf[INET_ADDRSTRLEN] = {};
         const auto * sin = reinterpret_cast<const struct sockaddr_in *>(a->ifa_addr);
@@ -133,11 +136,17 @@ std::string query_ipv4(const char * ifname)
 
 } // namespace
 
-void net_refresh(NetStatus & status, const std::string & ifname)
+void net_refresh(NetStatus & status, string_view ifname)
 {
-    status.ssid = query_ssid(ifname.c_str());
-    status.ipv4 = query_ipv4(ifname.c_str());
-    status.linked = query_carrier(ifname.c_str());
-    if (!query_signal(ifname.c_str(), status.signal_dbm))
+    /* C boundary: the wext ioctl and the sysfs path want null-terminated
+     * char arrays; string_view carries no such guarantee, so materialize
+     * one fixed-size copy (iface names are IFNAMSIZ-bounded anyway). */
+    char ifn[IFNAMSIZ] = {};
+    memcpy(ifn, ifname.data(), min(ifname.size(), size_t(IFNAMSIZ - 1)));
+
+    status.ssid = query_ssid(ifn);
+    status.ipv4 = query_ipv4(ifn);
+    status.linked = query_carrier(ifn);
+    if (!query_signal(ifn, status.signal_dbm))
         status.signal_dbm = 0;
 }

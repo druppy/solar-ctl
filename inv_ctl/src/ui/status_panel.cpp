@@ -2,7 +2,9 @@
 
 #include <cstdio>
 
-StatusPanel build_status_panel(lv_obj_t * parent)
+using namespace std;
+
+StatusPanel build_status_panel(lv_obj_t * parent, const BoardInfo & board)
 {
     lv_obj_t * col = lv_obj_create(parent);
     lv_obj_remove_style_all(col);
@@ -20,6 +22,17 @@ StatusPanel build_status_panel(lv_obj_t * parent)
     lv_label_set_text(panel.ssid, "SSID: --");
     lv_label_set_text(panel.signal, "no link");
     lv_label_set_text(panel.ip, "IP: --");
+
+    /* Static board identity; empty BoardInfo (laptop, non-Pi board) keeps
+     * the column exactly as it was. */
+    if (!board.model.empty()) {
+        char buf[64];
+        panel.model = lv_label_create(col);
+        lv_label_set_text(panel.model, board.model.c_str());
+        snprintf(buf, sizeof(buf), "SN: %s", board.serial.c_str());
+        panel.serial = lv_label_create(col);
+        lv_label_set_text(panel.serial, buf);
+    }
     return panel;
 }
 
@@ -27,15 +40,15 @@ void status_panel_update(StatusPanel & panel, const NetStatus & net)
 {
     char buf[64];
 
-    std::snprintf(buf, sizeof(buf), "SSID: %s", net.ssid.c_str());
+    snprintf(buf, sizeof(buf), "SSID: %s", net.ssid.c_str());
     lv_label_set_text(panel.ssid, buf);
 
     if (net.linked)
-        std::snprintf(buf, sizeof(buf), "WiFi: %d dBm", net.signal_dbm);
+        snprintf(buf, sizeof(buf), "WiFi: %d dBm", net.signal_dbm);
     else
-        std::snprintf(buf, sizeof(buf), "WiFi: no link");
+        snprintf(buf, sizeof(buf), "WiFi: no link");
     lv_label_set_text(panel.signal, buf);
 
-    std::snprintf(buf, sizeof(buf), "IP: %s", net.ipv4.c_str());
+    snprintf(buf, sizeof(buf), "IP: %s", net.ipv4.c_str());
     lv_label_set_text(panel.ip, buf);
 }

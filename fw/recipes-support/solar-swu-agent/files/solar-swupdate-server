@@ -1,0 +1,44 @@
+#!/bin/sh
+# Run SWUpdate as the HTTP install server (:8080) for the A/B scheme.
+# Busybox-ash safe. Doc: fw/docs/swupdate-ota.md section 6.7.
+#
+# The whole point: swclient or `curl -F file=@fw.swu http://<board>:8080/upload`
+# just works - no -e/-k thinking. The three gates are baked into THIS command
+# line, derived at service start (the slot cannot change while we run):
+#   -k  every stream is signature-verified (RSA, swu-signing class key);
+#       a SIGNED_IMAGES build refuses to start without it.
+#   -e  uploads carry no software set, so the daemon selection applies:
+#       ONLY the set that writes the INACTIVE slot (verified in 2026.05.1,
+#       core/stream_interface.c: a request-borne set would override this,
+#       an empty one keeps it).
+#   -q  belt: any client that DOES propose a set must be on this list, so a
+#       client can never target the partition we are running from.
+# HW revision needs no flag: /etc/hwrevision is checked against the signed
+# sw-description during every stream parse.
+#
+# Reboot on SUCCESS is NOT done here: solar-swupdate-progress.service sees
+# SUCCESS on the progress socket and runs solar-swu-reboot (systemd
+# shutdown, honours the solar-update -n marker). Same contract as the CLI.
+set -e
+
+KEY=/etc/solar/swupdate.pub.pem
+[ -f "$KEY" ] || { echo "solar-swupdate-server: missing $KEY" >&2; exit 1; }
+
+ROOTPART=$(sed -n 's|.*root=/dev/mmcblk0p\([0-9]\{1,2\}\).*|\1|p' /proc/cmdline)
+case "$ROOTPART" in
+    2) SET=alt ;;   # running slot a -> server may only install slot b
+    3) SET=main ;;  # running slot b -> server may only install slot a
+    *) echo "solar-swupdate-server: unexpected root= partition '$ROOTPART' (not p2/p3?)" >&2
+       exit 1 ;;
+esac
+
+# The rawfile handler needs the target files' parents to exist (same reason
+# solar-update does it; do it here once so HTTP installs need nothing else).
+mkdir -p /data/cores/slot-a /data/cores/slot-b
+
+echo "solar-swupdate-server: HTTP :8080, accepting ONLY set 'stable,$SET' (the inactive slot)"
+exec swupdate \
+    -e "stable,$SET" \
+    -q "stable,$SET" \
+    -k "$KEY" \
+    -w "-p 8080 -t 30 -r /usr/share/solar-swu-web"

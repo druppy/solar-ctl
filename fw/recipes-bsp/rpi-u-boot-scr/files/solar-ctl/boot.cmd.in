@@ -3,11 +3,12 @@
 # Doc: swupdate-ota.md §5 (per-slot kernel), §10 step 4.
 #
 # Slot pick: U-Boot env var "slot" (a|b), default a, validated in-script.
-# The env persists in /boot/uboot.env (FAT file - CONFIG_ENV_FAT_FILE in
-# rpi_0_w_defconfig, proven by the smoke bench). This script NEVER calls
-# saveenv, so there is no FAT write per boot; a slot switch is an explicit
-# `fw_setenv slot <a|b>` from the target (remount /boot rw first), one FAT
-# write per switch.
+# Since 2026-10-05 the env persists in a RAW redundant pair in a hidden SD
+# area (ENV_IS_IN_MMC + ENV_REDUNDANT, class solar-ablayout) - not in the
+# old /boot/uboot.env FAT file. This script NEVER calls saveenv, so there
+# is no env write per boot; a slot switch is an explicit
+# `fw_setenv slot <a|b>` from the target (raw area, no mount needed), two
+# 16 KiB copies per switch, power-cut safe by redundancy.
 #
 # root= is appended HERE because the firmware cmdline carries none
 # (CMDLINE_ROOTFS="" in kas-rpi0.yml). The per-board tokens the firmware

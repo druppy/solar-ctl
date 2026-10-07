@@ -1,0 +1,18 @@
+[Unit]
+Description=solar-ctl nftables firewall (default-deny; SSH + SWUpdate open)
+# Same ordering contract as upstream nftables.service: land the rules before
+# any userspace networking starts (wpa_supplicant/DHCP come after
+# network-pre.target), so there is no open window at boot.
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# 'nft -f' is one atomic transaction (solar.nft starts with flush ruleset),
+# so a restart replaces the ruleset without a gap.
+ExecStart=/usr/sbin/nft -f /etc/nftables/solar.nft
+ExecStop=/usr/sbin/nft flush ruleset
+
+[Install]
+WantedBy=multi-user.target

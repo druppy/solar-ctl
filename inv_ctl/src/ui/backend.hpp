@@ -3,6 +3,7 @@
 #include "lvgl.hpp"
 
 #include <string>
+#include <string_view>
 
 /* Creates the display backend, or nullptr + err message on failure
  * (e.g. the framebuffer does not exist yet - the NV3007 panel appears
@@ -14,7 +15,7 @@
  * lv_display_set_rotation() (LVGL swaps the logical resolution and
  * rotates the rendered frame on flush); the SDL window is created at the
  * logical size directly, so the desktop preview is upright. */
-lv_display_t * create_display(const std::string & backend,
-                              const std::string & fbdev,
+lv_display_t * create_display(std::string_view backend,
+                              std::string_view fbdev,
                               int rotation_deg,
                               std::string & err);
