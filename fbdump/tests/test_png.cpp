@@ -9,7 +9,7 @@
 #define FBDUMP_TESTS_BUILD 1
 #include "../src/main.cpp"
 
-#include <catch_amalgamated.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <cstdio>
 #include <fstream>

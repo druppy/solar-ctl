@@ -10,7 +10,7 @@
    These encode traps found the hard way on the glass, 2026-10-02:
    leading space, padded name, "44/70" quality, "-67." trailing-dot level,
    0000 status on an associated mac80211 iface, "--"/"99/99" markers. */
-#include "catch_amalgamated.hpp"
+#include <catch2/catch_test_macros.hpp>
 
 #include "../src/net.cpp"
 

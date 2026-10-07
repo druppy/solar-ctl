@@ -7,7 +7,7 @@
    (2026-10-06): both DT properties are ONE NUL-terminated string with no
    newline. Unlike the net fixtures these bytes contain an embedded NUL,
    so the stream fixture writes an explicit length. */
-#include "catch_amalgamated.hpp"
+#include <catch2/catch_test_macros.hpp>
 
 #include "../src/board.cpp"
 

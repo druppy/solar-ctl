@@ -36,30 +36,23 @@ install(TARGETS fbdump RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 if(FBDUMP_BUILD_TESTS)
     enable_testing()
-    include(FetchContent)
-    # Same Catch2 pin as inv_ctl's unit tests (EXCLUDE_FROM_ALL needs
-    # CMake>=3.28; the CI runner provides it, the Yocto build never
-    # configures this branch - FBDUMP_BUILD_TESTS stays OFF there).
-    FetchContent_Declare(catch2
-        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-        GIT_TAG v3.7.1
-        GIT_SHALLOW TRUE
-        EXCLUDE_FROM_ALL)
-    FetchContent_MakeAvailable(catch2)
+    # Catch2 from the platform (apt libcatch2-dev on CI runners and dev
+    # laptops), never a fetched copy: find_package fails loudly when absent.
+    find_package(Catch2 3 REQUIRED)
 
     # test_png.cpp #includes ../src/main.cpp on purpose (reaches the anonymous
     # namespace; FBDUMP_TESTS_BUILD compiles its main() out - do NOT also
     # compile src/main.cpp into this target, duplicate symbols).
-    add_executable(fbdump_tests
-        tests/test_png.cpp
-        ${catch2_SOURCE_DIR}/extras/catch_amalgamated.cpp)
-    target_include_directories(fbdump_tests PRIVATE
-        tests ${catch2_SOURCE_DIR}/extras)
+    add_executable(fbdump_tests tests/test_png.cpp)
+    target_include_directories(fbdump_tests PRIVATE tests)
     target_compile_definitions(fbdump_tests PRIVATE
         FBDUMP_TESTS_BUILD=1
         FBDUMP_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests")
+    target_link_libraries(fbdump_tests PRIVATE Catch2::Catch2WithMain)
 
-    list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+    # Debian ships Catch.cmake next to Catch2Config.cmake; upstream puts it in
+    # the config dir too, so ${Catch2_DIR} covers both.
+    list(APPEND CMAKE_MODULE_PATH ${Catch2_DIR})
     include(Catch)
     catch_discover_tests(fbdump_tests)
 endif()
