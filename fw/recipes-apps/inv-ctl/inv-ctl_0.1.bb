@@ -4,6 +4,13 @@
 # LVGL comes from meta-oe (PACKAGECONFIG:pn-lvgl = "fbdev" in the distro
 # conf gives us the LV_USE_LINUX_FBDEV driver); glibmm-2.68 is the newest
 # glibmm (2.88, glib-2.68 ABI series).
+#
+# swupdate supplies the progress-IPC protocol definitions (its -dev
+# package installs /usr/include/progress_ipc.h + swupdate_status.h) and
+# libswupdate, which we link for get_prog_socket(). The shlib auto-dep
+# pulls the swupdate-ipc package (libswupdate0.1, ~18 KB) into the image
+# - the daemon binary itself embeds these objects statically, so this is
+# a genuinely new runtime package, not one already present.
 
 SUMMARY = "solar-ctl inverter controller (LVGL UI)"
 DESCRIPTION = "Display/UI half of the solar-ctl inverter controller: LVGL scene on the Linux framebuffer (NV3007 2.79-inch panel), glibmm main loop. Modbus transport attaches to the same loop later."
@@ -19,11 +26,11 @@ FILESEXTRAPATHS:prepend := "${@os.path.abspath('${THISDIR}/../../..')}:"
 SRC_URI = "file://inv_ctl"
 S = "${UNPACKDIR}/inv_ctl"
 
-DEPENDS = "lvgl glibmm-2.68"
+DEPENDS = "lvgl glibmm-2.68 swupdate"
 
 inherit cmake pkgconfig systemd
 
-EXTRA_OECMAKE = "-DINV_CTL_SYSTEM_LVGL=ON"
+EXTRA_OECMAKE = "-DINV_CTL_SYSTEM_LVGL=ON -DINV_CTL_SYSTEM_SWUPDATE=ON"
 
 SYSTEMD_SERVICE:${PN} = "inv-ctl.service"
 SYSTEMD_AUTO_ENABLE = "enable"
