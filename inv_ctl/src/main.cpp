@@ -193,10 +193,11 @@ int main(int argc, char * argv[])
             overall = overall_percent(m, overall);
             if (lv_screen_active() != upgrade.screen)
                 lv_screen_load(upgrade.screen);
-            /* Raw state token plus the step counter, so the alternating
-             * DOWNLOAD/PROGRESS messages read as one story on the fixed-
-             * width label (the arc shows the composed percent). */
-            string state(state_name(m.status));
+            /* Calm phase word + step counter: the raw tokens alternate
+             * many times per second (journal keeps them via the Updater);
+             * the screen shows one stable story while the arc carries the
+             * composed percent. */
+            string state(phase_name(m));
             if (m.cur_step > 0 && m.nsteps > 0) {
                 state += " ";
                 state += to_string(m.cur_step);

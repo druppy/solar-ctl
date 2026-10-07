@@ -21,7 +21,8 @@ struct UpgradeScreen {
 
 UpgradeScreen build_upgrade_screen();
 
-/* Three lines: "Upgrading" / raw protocol state / percent, arc = percent. */
+/* Three lines: "Upgrading" / calm phase word ("Installing k/n", raw tokens
+ * only in the journal) / percent, arc = composed monotonic percent. */
 void upgrade_status(UpgradeScreen & us, std::string_view state, unsigned percent);
 
 /* Single centered line, arc hidden (used for "Upgrade failed" in red and

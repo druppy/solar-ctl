@@ -56,6 +56,12 @@ Action action_for(const progress_msg & msg);
 std::string_view state_name(std::uint32_t status);
 std::string_view source_name(std::uint32_t source);
 
+/* Calm phase word for the status line. The daemon alternates raw tokens
+ * (DOWNLOAD/PROGRESS/RUN) many times per second while ONE streaming phase
+ * runs - rendering those verbatim makes the label flap (journal-worthy
+ * noise, screen-hostile). Once the first image step starts, everything is
+ * "Installing" until SUCCESS/FAILURE take other paths. */
+std::string_view phase_name(const progress_msg & msg);
 
 /* One honest bar out of the daemon's TWO parallel axes (core/
  * progress_thread.c): dwl_percent = share of the archive streamed into

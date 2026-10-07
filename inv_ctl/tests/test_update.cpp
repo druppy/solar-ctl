@@ -213,6 +213,28 @@ TEST_CASE("overall percent: two axes composed, never backwards")
     CHECK(overall_percent(*parse_progress_msg(msg_span(m)), 0) == 100u);
 }
 
+TEST_CASE("phase_name: one calm word per real phase")
+{
+    progress_msg m = make_msg();
+    m.status = START;
+    CHECK(phase_name(*parse_progress_msg(msg_span(m))) == "Starting");
+
+    m.status = DOWNLOAD; /* bytes streaming, first image not parsed yet */
+    CHECK(phase_name(*parse_progress_msg(msg_span(m))) == "Receiving");
+
+    /* The stressful alternation: DOWNLOAD and PROGRESS of the SAME step
+     * must render the identical word, or the label flaps several times a
+     * second (the exact complaint this function exists to silence). */
+    m.nsteps = 2;
+    m.cur_step = 1;
+    CHECK(phase_name(*parse_progress_msg(msg_span(m))) == "Installing");
+    m.status = PROGRESS;
+    CHECK(phase_name(*parse_progress_msg(msg_span(m))) == "Installing");
+    m.status = RUN;
+    m.cur_step = 2;
+    CHECK(phase_name(*parse_progress_msg(msg_span(m))) == "Installing");
+}
+
 TEST_CASE("state and source names")
 {
     CHECK(state_name(DOWNLOAD) == "DOWNLOAD");

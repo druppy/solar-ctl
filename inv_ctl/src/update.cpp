@@ -93,6 +93,18 @@ string_view state_name(uint32_t status)
     }
 }
 
+string_view phase_name(const progress_msg & msg)
+{
+    /* core/progress_thread.c: swupdate_progress_inc_step bumps cur_step
+     * before sending, so every install-phase message carries cur_step >= 1
+     * regardless of which token triggered it. The pre-step window is START
+     * or the stream opening (early DOWNLOAD ticks before sw-description
+     * has announced the first image). */
+    if (msg.cur_step > 0)
+        return "Installing";
+    return msg.status == DOWNLOAD ? "Receiving" : "Starting";
+}
+
 string_view source_name(uint32_t source)
 {
     switch (source) {
